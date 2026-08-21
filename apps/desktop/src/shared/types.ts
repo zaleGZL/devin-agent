@@ -31,6 +31,8 @@ export interface SessionSummary {
   storagePath?: string;
   cwd: string;
   title: string;
+  /** App-local title override. Devin remains the transcript source of truth. */
+  customTitle?: string;
   createdAt: string;
   updatedAt: string;
   provider?: ProviderId;
@@ -189,6 +191,7 @@ export interface DesktopApi {
     list(cwd?: string): Promise<SessionSummary[]>;
     delete?(id: string): Promise<void>;
     pin?(id: string, pinned: boolean): Promise<boolean>;
+    rename?(id: string, title: string): Promise<SessionSummary | undefined>;
     archive?(id: string): Promise<SessionSummary | undefined>;
     unarchive?(id: string): Promise<SessionSummary | undefined>;
   };

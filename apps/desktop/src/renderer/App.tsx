@@ -7,6 +7,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -24,6 +25,7 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  Ellipsis,
   ExternalLink,
   Eye,
   File as FileIcon,
@@ -48,7 +50,9 @@ import {
   Paperclip,
   PanelLeft,
   PanelRight,
+  Pencil,
   Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
@@ -116,6 +120,8 @@ interface PreviewImage extends ChatImage {
 }
 
 const PROJECT_TASK_PREVIEW_COUNT = 4;
+const SESSION_MENU_WIDTH = 176;
+const SESSION_MENU_HEIGHT = 126;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const DEVIN_WEBSITE_URL = "https://devin.ai";
 const DEVIN_GITHUB_URL = "https://github.com/devin-ai";
@@ -184,10 +190,14 @@ export default function App() {
   const [sessionQuery, setSessionQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [archiveNotice, setArchiveNotice] = useState<SessionSummary>();
+  const [sessionMenu, setSessionMenu] = useState<{ sessionId: string; left: number; top: number }>();
+  const [renamingSessionId, setRenamingSessionId] = useState<string>();
+  const [sessionRenameDraft, setSessionRenameDraft] = useState("");
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sessionRenameInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followingConversationTailRef = useRef(true);
   const previousConversationScrollTopRef = useRef(0);
@@ -212,6 +222,12 @@ export default function App() {
   useEffect(() => {
     availableModelsRef.current = availableModels;
   }, [availableModels]);
+
+  useEffect(() => {
+    if (!renamingSessionId) return;
+    sessionRenameInputRef.current?.focus();
+    sessionRenameInputRef.current?.select();
+  }, [renamingSessionId]);
 
   const selectActiveSession = useCallback((sessionId?: string) => {
     activeSessionRef.current = sessionId;
@@ -547,7 +563,7 @@ export default function App() {
         if (isActiveUpdate && typeof normalized.locked === "boolean") setSessionLocked(normalized.locked);
         setSessions((current) => current.map((session) => session.id === normalized.sessionId ? {
           ...session,
-          ...(normalized.title ? { title: normalized.title } : {}),
+          ...(normalized.title && !session.customTitle ? { title: normalized.title } : {}),
           ...(normalized.cwd ? { cwd: normalized.cwd } : {}),
           ...(typeof normalized.locked === "boolean" ? { locked: normalized.locked } : {}),
           ...(normalized.updatedAt ? { updatedAt: new Date(normalized.updatedAt).toISOString() } : {}),
@@ -588,6 +604,11 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && sessionMenu) {
+        event.preventDefault();
+        setSessionMenu(undefined);
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setCommandOpen((open) => !open);
@@ -600,7 +621,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [running, searchOpen]);
+  }, [running, searchOpen, sessionMenu]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -740,6 +761,67 @@ export default function App() {
       return;
     }
     await startAgent(session.cwd, session.path, undefined, projectPath);
+  };
+
+  const openSessionMenu = (event: ReactMouseEvent<HTMLElement>, session: SessionSummary) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - SESSION_MENU_WIDTH - 8, rect.right - SESSION_MENU_WIDTH));
+    const below = rect.bottom + 4;
+    const top = below + SESSION_MENU_HEIGHT <= window.innerHeight - 8
+      ? below
+      : Math.max(8, rect.top - SESSION_MENU_HEIGHT - 4);
+    setSessionMenu({ sessionId: session.id, left, top });
+  };
+
+  const beginSessionRename = (session: SessionSummary) => {
+    setSessionMenu(undefined);
+    setSessionRenameDraft(session.title);
+    setRenamingSessionId(session.id);
+  };
+
+  const cancelSessionRename = () => {
+    setRenamingSessionId(undefined);
+    setSessionRenameDraft("");
+  };
+
+  const commitSessionRename = async (session: SessionSummary) => {
+    const title = sessionRenameDraft.trim();
+    if (!title || title === session.title) {
+      cancelSessionRename();
+      return;
+    }
+    const previousTitle = session.title;
+    const previousCustomTitle = session.customTitle;
+    setRenamingSessionId(undefined);
+    setSessionRenameDraft("");
+    setSessions((current) => current.map((item) => item.id === session.id ? { ...item, title, customTitle: title } : item));
+    try {
+      const renamed = await window.devinAgent.sessions.rename?.(session.id, title);
+      if (!renamed) throw new Error(t("session.renameFailed"));
+      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...renamed } : item));
+    } catch (error) {
+      setSessions((current) => current.map((item) => item.id === session.id ? {
+        ...item,
+        title: previousTitle,
+        ...(previousCustomTitle ? { customTitle: previousCustomTitle } : { customTitle: undefined }),
+      } : item));
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  };
+
+  const toggleSessionPinned = async (session: SessionSummary) => {
+    const nextPinned = !session.pinned;
+    setSessionMenu(undefined);
+    setSessions((current) => sortSidebarSessions(current.map((item) => item.id === session.id ? { ...item, pinned: nextPinned } : item)));
+    try {
+      const updated = await window.devinAgent.sessions.pin?.(session.id, nextPinned);
+      if (!updated) throw new Error(t("session.pinFailed"));
+    } catch (error) {
+      setSessions((current) => sortSidebarSessions(current.map((item) => item.id === session.id ? { ...item, pinned: session.pinned } : item)));
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
   };
 
   const archiveSession = async (session: SessionSummary) => {
@@ -1095,6 +1177,7 @@ export default function App() {
     const grouped = new Map<string, SessionSummary[]>();
     for (const item of workspaces) grouped.set(item.path, []);
     for (const session of sessions) if (!session.archived) grouped.get(session.cwd)?.push(session);
+    for (const projectItems of grouped.values()) projectItems.sort(compareSidebarSessions);
     return grouped;
   }, [sessions, workspaces]);
   const filteredWorkspaces = useMemo(() => {
@@ -1107,7 +1190,7 @@ export default function App() {
   }, [projectSessions, sessionQuery, workspaces]);
   const recentTasks = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
-    const tasks = sessions.filter((session) => !session.archived && !projectPaths.has(session.cwd));
+    const tasks = sessions.filter((session) => !session.archived && !projectPaths.has(session.cwd)).sort(compareSidebarSessions);
     return query ? tasks.filter((session) => session.title.toLowerCase().includes(query)) : tasks;
   }, [projectPaths, sessionQuery, sessions]);
   const activeTitle = sessions.find((session) => session.path === activeSession)?.title ?? (messages[0]?.text || t("status.newThread"));
@@ -1115,6 +1198,7 @@ export default function App() {
   const selectedModel = availableModels.find((candidate) => candidate.provider === provider && candidate.id === model);
   const selectedCapabilityModel = capabilities?.models.find((candidate) => candidate.id === model);
   const imagePromptEnabled = Boolean(capabilities && supportsImagePrompt(capabilities, selectedCapabilityModel));
+  const sessionMenuItem = sessionMenu ? sessions.find((session) => session.id === sessionMenu.sessionId) : undefined;
 
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}`}>
@@ -1186,18 +1270,48 @@ export default function App() {
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
                       {visibleTasks.map((session) => (
-                        <div key={session.path} className={`project-task-item ${session.path === activeSession ? "active" : ""}`}>
-                          <button
-                            className="project-task-row"
-                            onClick={() => void openSession(session)}
-                            title={session.title}
-                            aria-current={session.path === activeSession ? "page" : undefined}
-                          >
-                            <span>{session.title}</span>
-                          </button>
+                        <div
+                          key={session.path}
+                          className={`project-task-item ${session.path === activeSession ? "active" : ""}`}
+                          onContextMenu={(event) => openSessionMenu(event, session)}
+                        >
+                          {renamingSessionId === session.id ? (
+                            <input
+                              ref={sessionRenameInputRef}
+                              className="session-rename-input project-session-rename"
+                              value={sessionRenameDraft}
+                              maxLength={120}
+                              aria-label={t("session.rename")}
+                              onChange={(event) => setSessionRenameDraft(event.target.value)}
+                              onBlur={() => void commitSessionRename(session)}
+                              onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === "Enter") { event.preventDefault(); void commitSessionRename(session); }
+                                if (event.key === "Escape") { event.preventDefault(); cancelSessionRename(); }
+                              }}
+                            />
+                          ) : (
+                            <button
+                              className="project-task-row"
+                              onClick={() => void openSession(session)}
+                              title={session.title}
+                              aria-current={session.path === activeSession ? "page" : undefined}
+                            >
+                              <span>{session.title}</span>
+                            </button>
+                          )}
                           {runningSessionIds.has(session.path)
-                            ? <LoaderCircle className="spin session-running" size={12} aria-label={t("status.running")} />
-                            : <button className="session-archive-action" onClick={() => void archiveSession(session)} aria-label={t("archive.action", { title: session.title })} title={t("archive.action", { title: session.title })}><Archive size={12} /></button>}
+                            ? <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
+                            : session.pinned ? <Pin className="session-row-status session-pin-status" size={11} fill="currentColor" aria-label={t("session.pinned")} /> : null}
+                          <button
+                            className="session-more-action"
+                            onClick={(event) => openSessionMenu(event, session)}
+                            aria-label={t("session.actions", { title: session.title })}
+                            aria-haspopup="menu"
+                            title={t("session.actions", { title: session.title })}
+                          >
+                            <Ellipsis size={14} />
+                          </button>
                         </div>
                       ))}
                       {!query && taskSource.length > PROJECT_TASK_PREVIEW_COUNT && (
@@ -1227,13 +1341,43 @@ export default function App() {
           {recentSectionOpen && <>
             {recentTasks.length === 0 && <div className="sidebar-empty">{t("sidebar.noRecentTasks")}</div>}
             {recentTasks.map((session) => (
-              <div key={session.path} className={`recent-task-item ${session.path === activeSession ? "active" : ""}`}>
-                <button className="thread-row recent-task-row" onClick={() => void openSession(session)}>
-                  <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
-                </button>
+              <div
+                key={session.path}
+                className={`recent-task-item ${session.path === activeSession ? "active" : ""}`}
+                onContextMenu={(event) => openSessionMenu(event, session)}
+              >
+                {renamingSessionId === session.id ? (
+                  <input
+                    ref={sessionRenameInputRef}
+                    className="session-rename-input recent-session-rename"
+                    value={sessionRenameDraft}
+                    maxLength={120}
+                    aria-label={t("session.rename")}
+                    onChange={(event) => setSessionRenameDraft(event.target.value)}
+                    onBlur={() => void commitSessionRename(session)}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter") { event.preventDefault(); void commitSessionRename(session); }
+                      if (event.key === "Escape") { event.preventDefault(); cancelSessionRename(); }
+                    }}
+                  />
+                ) : (
+                  <button className="thread-row recent-task-row" onClick={() => void openSession(session)} title={session.title}>
+                    <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
+                  </button>
+                )}
                 {runningSessionIds.has(session.path)
-                  ? <LoaderCircle className="spin session-running" size={12} aria-label={t("status.running")} />
-                  : <button className="session-archive-action" onClick={() => void archiveSession(session)} aria-label={t("archive.action", { title: session.title })} title={t("archive.action", { title: session.title })}><Archive size={12} /></button>}
+                  ? <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
+                  : session.pinned ? <Pin className="session-row-status session-pin-status" size={11} fill="currentColor" aria-label={t("session.pinned")} /> : null}
+                <button
+                  className="session-more-action"
+                  onClick={(event) => openSessionMenu(event, session)}
+                  aria-label={t("session.actions", { title: session.title })}
+                  aria-haspopup="menu"
+                  title={t("session.actions", { title: session.title })}
+                >
+                  <Ellipsis size={14} />
+                </button>
               </div>
             ))}
           </>}
@@ -1472,6 +1616,40 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {sessionMenu && sessionMenuItem && (
+        <>
+          <div className="session-menu-backdrop" onPointerDown={() => setSessionMenu(undefined)} aria-hidden="true" />
+          <div
+            className="session-action-menu"
+            role="menu"
+            aria-label={t("session.actions", { title: sessionMenuItem.title })}
+            style={{ left: sessionMenu.left, top: sessionMenu.top }}
+          >
+            <button type="button" role="menuitem" onClick={() => beginSessionRename(sessionMenuItem)}>
+              <Pencil size={14} />
+              <span>{t("session.rename")}</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => void toggleSessionPinned(sessionMenuItem)}>
+              {sessionMenuItem.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              <span>{t(sessionMenuItem.pinned ? "session.unpin" : "session.pin")}</span>
+            </button>
+            <div className="session-action-separator" />
+            <button
+              type="button"
+              role="menuitem"
+              disabled={runningSessionIds.has(sessionMenuItem.path)}
+              onClick={() => {
+                setSessionMenu(undefined);
+                void archiveSession(sessionMenuItem);
+              }}
+            >
+              <Archive size={14} />
+              <span>{t("session.archive")}</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {archiveNotice && (
         <div className="archive-hint" role="status" aria-live="polite">
@@ -3158,6 +3336,16 @@ function relativeTime(value: string, locale: string, nowLabel: string): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`;
   return new Date(value).toLocaleDateString(locale, { month: "short", day: "numeric" });
+}
+
+function compareSidebarSessions(first: SessionSummary, second: SessionSummary): number {
+  return Number(Boolean(second.pinned)) - Number(Boolean(first.pinned))
+    || second.updatedAt.localeCompare(first.updatedAt)
+    || first.title.localeCompare(second.title);
+}
+
+function sortSidebarSessions(sessions: SessionSummary[]): SessionSummary[] {
+  return [...sessions].sort(compareSidebarSessions);
 }
 
 function formatJson(value: unknown): string {

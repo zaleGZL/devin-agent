@@ -17,7 +17,9 @@ export function configureSessionIndex(file: string): void {
 
 export async function listSessions(cwd?: string): Promise<SessionSummary[]> {
   const items = await readIndex();
-  return items.filter((item) => !cwd || item.cwd === cwd).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return items
+    .filter((item) => !cwd || item.cwd === cwd)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function upsertSessionSummary(summary: SessionSummary): Promise<SessionSummary[]> {
@@ -44,9 +46,9 @@ export function mergeSessionSummary(existing: SessionSummary, incoming: SessionS
     ...existing,
     ...incoming,
     cwd: incoming.cwd.trim() || existing.cwd,
-    title: existingHasLocalConversationState && !incomingHasLocalConversationState
+    title: existing.customTitle ?? (existingHasLocalConversationState && !incomingHasLocalConversationState
       ? existing.title
-      : incoming.title.trim() || existing.title,
+      : incoming.title.trim() || existing.title),
     createdAt: earlierIsoDate(existing.createdAt, incoming.createdAt),
     updatedAt,
     ...(existing.messageCount !== undefined && incoming.messageCount === undefined
@@ -125,6 +127,18 @@ export async function setSessionPinned(id: string, pinned: boolean): Promise<boo
   items[index] = { ...items[index], pinned };
   await writeIndex(items);
   return true;
+}
+
+export async function renameSession(id: string, title: string): Promise<SessionSummary | undefined> {
+  const normalizedTitle = title.trim();
+  if (!normalizedTitle || normalizedTitle.length > 120) throw new Error("Session title must be between 1 and 120 characters");
+  const items = await readIndex();
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) return undefined;
+  const updated = { ...items[index], title: normalizedTitle, customTitle: normalizedTitle };
+  items[index] = updated;
+  await writeIndex(items);
+  return updated;
 }
 
 export async function archiveSession(id: string): Promise<SessionSummary | undefined> {

@@ -102,6 +102,7 @@ export function createPreviewApi(): DesktopApi {
         previewSession("3", "Plan the next release", 86_400_000, 6, generalTasksWorkspace),
       ],
       pin: async () => true,
+      rename: async (id, title) => previewSession(id, title, 0, 1),
       archive: async () => undefined,
       unarchive: async () => undefined,
       delete: async () => undefined,

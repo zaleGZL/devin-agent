@@ -48,6 +48,7 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
     delete: (id) => ipcRenderer.invoke("sessions:delete", id),
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
+    rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
     archive: (id) => ipcRenderer.invoke("sessions:archive", id),
     unarchive: (id) => ipcRenderer.invoke("sessions:unarchive", id),
   },

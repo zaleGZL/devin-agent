@@ -22,6 +22,7 @@ import {
   archiveSession,
   configureSessionIndex,
   listSessions,
+  renameSession,
   removeSessionSummary,
   setSessionPinned,
   unarchiveSession,
@@ -474,6 +475,7 @@ function registerIpc(): void {
     return listSessions(requestedCwd);
   });
   ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectString(id, "session id", 200), expectBoolean(pinned, "pinned")));
+  ipcMain.handle("sessions:rename", (_event, id: unknown, title: unknown) => renameSession(expectString(id, "session id", 200), expectString(title, "session title", 120)));
   ipcMain.handle("sessions:archive", (_event, id: unknown) => archiveSession(expectString(id, "session id", 200)));
   ipcMain.handle("sessions:unarchive", (_event, id: unknown) => unarchiveSession(expectString(id, "session id", 200)));
   ipcMain.handle("sessions:delete", async (_event, id: unknown) => {

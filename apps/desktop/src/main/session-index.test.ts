@@ -8,6 +8,8 @@ import {
   listSessions,
   mergeSessionSummary,
   readSessionSummary,
+  renameSession,
+  setSessionPinned,
   unarchiveSession,
   upsertSessionSummary,
 } from "./session-index";
@@ -50,6 +52,27 @@ describe("session index", () => {
     await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: true })]);
     await expect(unarchiveSession("session-1")).resolves.toMatchObject({ archived: false });
     await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: false })]);
+  });
+
+  it("persists custom titles and sorts pinned sessions first", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devin-agent-session-index-"));
+    temporaryDirectories.push(directory);
+    configureSessionIndex(path.join(directory, "sessions.json"));
+    await upsertSessionSummary({ id: "older", path: "older", cwd: "/tmp/project", title: "Older", createdAt: "2026-08-21T09:00:00Z", updatedAt: "2026-08-21T09:00:00Z" });
+    await upsertSessionSummary({ id: "newer", path: "newer", cwd: "/tmp/project", title: "Newer", createdAt: "2026-08-21T10:00:00Z", updatedAt: "2026-08-21T10:00:00Z" });
+
+    await expect(renameSession("older", "  Release checklist  ")).resolves.toMatchObject({ title: "Release checklist", customTitle: "Release checklist" });
+    await expect(setSessionPinned("older", true)).resolves.toBe(true);
+    await expect(listSessions()).resolves.toEqual([
+      expect.objectContaining({ id: "older", title: "Release checklist", pinned: true }),
+      expect.objectContaining({ id: "newer" }),
+    ]);
+
+    await upsertSessionSummary({ id: "older", path: "older", cwd: "/tmp/project", title: "Remote title", createdAt: "2026-08-21T09:00:00Z", updatedAt: "2026-08-21T11:00:00Z" });
+    await expect(listSessions()).resolves.toEqual([
+      expect.objectContaining({ id: "older", title: "Release checklist", customTitle: "Release checklist" }),
+      expect.objectContaining({ id: "newer" }),
+    ]);
   });
 
   it("keeps project membership and optimistic conversation metadata when ACP returns a partial summary", () => {
