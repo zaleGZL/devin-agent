@@ -11,6 +11,7 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
   platform: process.platform,
   app: {
     version: () => ipcRenderer.invoke("app:version"),
+    homeDirectory: () => ipcRenderer.invoke("app:home-directory"),
     openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
   },
   themes: {
@@ -27,6 +28,8 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     setShowReasoningProcess: (value) => ipcRenderer.invoke("settings:set-show-reasoning-process", value),
     getPersonalization: () => ipcRenderer.invoke("settings:get-personalization"),
     setPersonalization: (personalization) => ipcRenderer.invoke("settings:set-personalization", personalization),
+    getPinnedModelIds: () => ipcRenderer.invoke("settings:get-pinned-model-ids"),
+    setPinnedModelIds: (modelIds) => ipcRenderer.invoke("settings:set-pinned-model-ids", modelIds),
     getDevinCliPath: () => ipcRenderer.invoke("settings:get-devin-cli-path"),
     setDevinCliPath: (cliPath) => ipcRenderer.invoke("settings:set-devin-cli-path", cliPath),
     chooseDevinCliPath: () => ipcRenderer.invoke("settings:choose-devin-cli-path"),

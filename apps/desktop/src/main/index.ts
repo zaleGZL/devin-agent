@@ -347,6 +347,7 @@ function sendAppCommand(command: string): void {
 
 function registerIpc(): void {
   ipcMain.handle("app:version", () => app.getVersion());
+  ipcMain.handle("app:home-directory", () => app.getPath("home"));
   ipcMain.handle("app:open-external", async (_event, value: unknown) => {
     const url = expectString(value, "url", 4_096);
     if (!isSafeExternalUrl(url)) throw new Error("Only http(s) links can be opened");
@@ -365,6 +366,8 @@ function registerIpc(): void {
   ipcMain.handle("settings:set-show-reasoning-process", (_event, value: unknown) => appSettings.setShowReasoningProcess(expectBoolean(value, "show reasoning")));
   ipcMain.handle("settings:get-personalization", () => appSettings.getPersonalization());
   ipcMain.handle("settings:set-personalization", (_event, value: unknown) => appSettings.setPersonalization(expectPersonalization(value)));
+  ipcMain.handle("settings:get-pinned-model-ids", () => appSettings.getPinnedModelIds());
+  ipcMain.handle("settings:set-pinned-model-ids", (_event, value: unknown) => appSettings.setPinnedModelIds(expectModelIds(value)));
   ipcMain.handle("settings:get-devin-cli-path", () => appSettings.getDevinCliPath());
   ipcMain.handle("settings:set-devin-cli-path", async (_event, value: unknown) => {
     const cliPath = value === null ? null : expectString(value, "Devin CLI path", 4_096);
@@ -641,6 +644,10 @@ function expectPersonalization(value: unknown): PersonalizationSettings {
   const data = expectRecord(value, "personalization");
   if (typeof data.tone !== "string" || typeof data.customInstructions !== "string") throw new Error("Invalid personalization");
   return { tone: data.tone as PersonalizationSettings["tone"], customInstructions: data.customInstructions };
+}
+function expectModelIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 32) throw new Error("Invalid pinned model ids");
+  return value.map((entry) => expectString(entry, "model id", 200));
 }
 function expectAgentStartOptions(value: unknown): AgentStartOptions {
   const data = expectRecord(value, "agent options");

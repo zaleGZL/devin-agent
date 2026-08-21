@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,6 +12,12 @@ import {
 describe("Electron security boundary", () => {
   it("keeps Node out of the renderer", () => {
     expect(SECURE_RENDERER_WEB_PREFERENCES).toEqual({ contextIsolation: true, nodeIntegration: false, sandbox: true });
+  });
+
+  it("keeps the sandboxed preload free of Node built-in imports", () => {
+    const preloadSource = readFileSync(new URL("../preload/index.ts", import.meta.url), "utf8");
+    expect([...preloadSource.matchAll(/from\s+["'](node:[^"']+)["']/g)].map((match) => match[1])).toEqual([]);
+    expect(preloadSource).toContain('ipcRenderer.invoke("app:home-directory")');
   });
 
   it("opens only explicit HTTP(S) external links", () => {

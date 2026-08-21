@@ -5,6 +5,7 @@ const themesWorkspace = "/Users/demo/projects/codexthemes-skills";
 const terminalWorkspace = "/Users/demo/projects/termany";
 const generalTasksWorkspace = "/Users/demo/Library/Application Support/Devin Agent/tasks";
 const previewNow = new Date().toISOString();
+let pinnedModelIds: string[] = [];
 
 function previewSession(id: string, title: string, ageMs: number, messageCount: number, cwd = workspace) {
   const sessionPath = `preview-session-${id}`;
@@ -28,6 +29,7 @@ export function createPreviewApi(): DesktopApi {
     platform: "darwin",
     app: {
       version: async () => "0.1.0-preview",
+      homeDirectory: async () => "/Users/demo",
       openExternal: async () => undefined,
     },
     themes: {
@@ -44,6 +46,8 @@ export function createPreviewApi(): DesktopApi {
       setShowReasoningProcess: async () => undefined,
       getPersonalization: async () => ({ tone: "default", customInstructions: "" }),
       setPersonalization: async () => undefined,
+      getPinnedModelIds: async () => [...pinnedModelIds],
+      setPinnedModelIds: async (modelIds) => { pinnedModelIds = [...modelIds]; },
       getDevinCliPath: async () => "/Users/demo/.local/bin/devin",
       setDevinCliPath: async (binaryPath) => ({ id: "devin", name: "Devin CLI", configured: true, source: "external-cli", defaultModel: "", version: "3000.4.25", binaryPath: binaryPath ?? "/Users/demo/.local/bin/devin", authenticated: "unknown" }),
       chooseDevinCliPath: async () => ({ id: "devin", name: "Devin CLI", configured: true, source: "external-cli", defaultModel: "", version: "3000.4.25", binaryPath: "/Users/demo/.local/bin/devin", authenticated: "unknown" }),

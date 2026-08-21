@@ -11,11 +11,14 @@ interface AppSettingsData {
   showReasoningProcess?: boolean;
   personalization?: PersonalizationSettings;
   devinCliPath?: string | null;
+  pinnedModelIds?: string[];
 }
 
 const LANGUAGE_PREFERENCES = new Set<LanguagePreference>(["system", "zh-CN", "en"]);
 const TONE_PRESET_SET = new Set<TonePreset>(TONE_PRESETS);
 const MAX_CUSTOM_INSTRUCTION_LENGTH = 1_500;
+const MAX_PINNED_MODELS = 32;
+const MAX_MODEL_ID_LENGTH = 200;
 
 export class AppSettings {
   constructor(
@@ -123,6 +126,20 @@ export class AppSettings {
     await this.write(data);
   }
 
+  async getPinnedModelIds(): Promise<string[]> {
+    const data = await this.read();
+    return normalizePinnedModelIds(data.pinnedModelIds);
+  }
+
+  async setPinnedModelIds(modelIds: string[]): Promise<void> {
+    if (!Array.isArray(modelIds)) throw new Error("Pinned models must be a list");
+    const normalized = normalizePinnedModelIds(modelIds);
+    if (normalized.length !== modelIds.length) throw new Error("Pinned model ids must be unique, non-empty strings");
+    const data = await this.read();
+    data.pinnedModelIds = normalized;
+    await this.write(data);
+  }
+
   private async read(): Promise<AppSettingsData> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.file, "utf8")) as unknown;
@@ -155,4 +172,19 @@ function isValidAvatarDataUrl(value: unknown): value is string {
 
 function unicodeLength(value: string): number {
   return Array.from(value).length;
+}
+
+function normalizePinnedModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const modelId = entry.trim();
+    if (!modelId || modelId.length > MAX_MODEL_ID_LENGTH || seen.has(modelId)) continue;
+    seen.add(modelId);
+    normalized.push(modelId);
+    if (normalized.length === MAX_PINNED_MODELS) break;
+  }
+  return normalized;
 }

@@ -114,4 +114,14 @@ describe("AppSettings", () => {
     await settings.setDevinCliPath(null);
     expect(await settings.getDevinCliPath()).toBeNull();
   });
+
+  it("persists a bounded, ordered list of pinned Devin models", async () => {
+    const settings = new AppSettings(file);
+    await settings.setPinnedModelIds(["glm-5-2-max", "adaptive"]);
+    expect(await settings.getPinnedModelIds()).toEqual(["glm-5-2-max", "adaptive"]);
+    await expect(settings.setPinnedModelIds(["adaptive", "adaptive"]))
+      .rejects.toThrow(/unique/i);
+    await expect(settings.setPinnedModelIds([""]))
+      .rejects.toThrow(/non-empty/i);
+  });
 });

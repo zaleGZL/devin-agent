@@ -44,6 +44,7 @@ import {
   Paperclip,
   PanelLeft,
   PanelRight,
+  Pin,
   Plus,
   Search,
   Settings,
@@ -94,6 +95,8 @@ import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
+import { organizeModels, togglePinnedModelId } from "./lib/model-picker";
+import { resolveNewTaskCwd } from "./lib/workspace-context";
 import type { DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
 
@@ -163,6 +166,7 @@ export default function App() {
   const [permission, setPermission] = useState<PermissionMode>("");
   const [sandbox] = useState<SandboxMode>("cli-managed");
   const [availableModels, setAvailableModels] = useState<AgentSnapshot["models"]>([]);
+  const [pinnedModelIds, setPinnedModelIds] = useState<string[]>([]);
   const [availableModes, setAvailableModes] = useState<NonNullable<AgentSnapshot["modes"]>>([]);
   const [availableCommands, setAvailableCommands] = useState<AvailableCommand[]>([]);
   const [capabilities, setCapabilities] = useState<DevinCapabilities>();
@@ -188,7 +192,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [sessionQuery, setSessionQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
@@ -200,7 +203,8 @@ export default function App() {
   const previousConversationScrollTopRef = useRef(0);
   const threadLayoutRef = useRef<HTMLDivElement>(null);
   const activeCwdRef = useRef<string | undefined>(undefined);
-  const sidebarFooterRef = useRef<HTMLDivElement>(null);
+  const homeDirectoryRef = useRef<string | undefined>(undefined);
+  const workspaceRef = useRef<string | undefined>(undefined);
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
 
@@ -293,6 +297,7 @@ export default function App() {
     setUiRequest(undefined);
     setActiveSession(sessionPath);
     activeCwdRef.current = cwd;
+    workspaceRef.current = projectPath;
     setWorkspace(projectPath);
     if (!background) {
       followingConversationTailRef.current = true;
@@ -336,7 +341,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPersonalization] = await Promise.all([
+      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPersonalization, storedPinnedModelIds, homeDirectory] = await Promise.all([
         window.devinAgent.workspace.recent(),
         window.devinAgent.sessions.list(),
         window.devinAgent.auth.status(),
@@ -345,6 +350,8 @@ export default function App() {
         window.devinAgent.settings.getProfile(),
         window.devinAgent.settings.getShowReasoningProcess(),
         window.devinAgent.settings.getPersonalization(),
+        window.devinAgent.settings.getPinnedModelIds(),
+        window.devinAgent.app.homeDirectory(),
       ]);
       if (cancelled) return;
       setWorkspaces(recentItems);
@@ -355,6 +362,7 @@ export default function App() {
       setProfile(storedProfile);
       setShowReasoningProcess(storedShowReasoningProcess);
       setPersonalization(storedPersonalization);
+      setPinnedModelIds(storedPinnedModelIds);
       applyTheme(themeItems.find((item) => item.id === activeThemeId) ?? null);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
         ?? providerItems.find((item) => item.configured);
@@ -366,7 +374,9 @@ export default function App() {
       const selectedProject = selectedSession
         ? recentItems.find((item) => item.path === selectedSession.cwd)
         : undefined;
-      activeCwdRef.current = selectedSession?.cwd;
+      homeDirectoryRef.current = homeDirectory;
+      activeCwdRef.current = selectedSession?.cwd ?? homeDirectory;
+      workspaceRef.current = selectedProject?.path;
       setWorkspace(selectedProject?.path);
       if (selectedProject) setExpandedProjects(new Set([selectedProject.path]));
       setActiveSession(selectedSession?.path);
@@ -525,22 +535,6 @@ export default function App() {
   }, [refreshSessionStats, refreshSessions, t]);
 
   useEffect(() => {
-    if (!accountMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !sidebarFooterRef.current?.contains(event.target)) setAccountMenuOpen(false);
-    };
-    const onEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setAccountMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onEscape);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [accountMenuOpen]);
-
-  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -550,11 +544,11 @@ export default function App() {
         event.preventDefault();
         setSettingsOpen(true);
       }
-      if (event.key === "Escape" && !searchOpen && !accountMenuOpen && running) void stopAgent();
+      if (event.key === "Escape" && !searchOpen && running) void stopAgent();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [accountMenuOpen, running, searchOpen]);
+  }, [running, searchOpen]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -621,15 +615,25 @@ export default function App() {
   };
 
   const createNewThread = async () => {
-    const cwd = activeCwdRef.current ?? workspace;
-    if (!cwd) {
-      await chooseWorkspace();
-      return;
-    }
+    const projectPath = workspaceRef.current;
+    const homeDirectory = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
+    homeDirectoryRef.current = homeDirectory;
+    const cwd = resolveNewTaskCwd(projectPath, homeDirectory);
     setMessages([]);
     setActiveSession(undefined);
     setAgentPlan(undefined);
-    await startAgent(cwd, undefined, undefined, workspace);
+    await startAgent(cwd, undefined, undefined, projectPath);
+    textareaRef.current?.focus();
+  };
+
+  const clearWorkspace = async () => {
+    if (!workspace || loading || running) return;
+    const cwd = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
+    homeDirectoryRef.current = cwd;
+    setMessages([]);
+    setActiveSession(undefined);
+    setAgentPlan(undefined);
+    await startAgent(cwd, undefined, undefined, undefined);
     textareaRef.current?.focus();
   };
 
@@ -651,6 +655,7 @@ export default function App() {
     if (session.locked === true) {
       setActiveSession(session.path);
       activeCwdRef.current = session.cwd;
+      workspaceRef.current = projectPath;
       setWorkspace(projectPath);
       return;
     }
@@ -749,7 +754,7 @@ export default function App() {
   };
 
   const changeModel = async (value: string) => {
-    const selected = availableModels.find((candidate) => `${candidate.provider}/${candidate.id}` === value);
+    const selected = availableModels.find((candidate) => candidate.id === value);
     if (!selected) return;
     try {
       await window.devinAgent.agent.command("set_model", { provider: "devin", modelId: selected.id });
@@ -759,6 +764,17 @@ export default function App() {
       void refreshSessionStats();
     } catch (error) {
       if (isAgentSessionClosedError(error)) return;
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  };
+
+  const changePinnedModelIds = async (next: string[]) => {
+    const previous = pinnedModelIds;
+    setPinnedModelIds(next);
+    try {
+      await window.devinAgent.settings.setPinnedModelIds(next);
+    } catch (error) {
+      setPinnedModelIds(previous);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
@@ -1033,27 +1049,13 @@ export default function App() {
           </>}
         </div>
 
-        <div className="sidebar-footer" ref={sidebarFooterRef}>
-          {accountMenuOpen && (
-            <div className="sidebar-account-menu" role="menu">
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setAccountMenuOpen(false);
-                  setSettingsOpen(true);
-                }}
-              >
-                <Settings size={16} />
-                <span>{t("sidebar.settings")}</span>
-                <kbd>⌘,</kbd>
-              </button>
-            </div>
-          )}
+        <div className="sidebar-footer">
           <button
+            type="button"
             className="sidebar-account-button"
-            onClick={() => setAccountMenuOpen((open) => !open)}
-            aria-haspopup="menu"
-            aria-expanded={accountMenuOpen}
+            onClick={() => setSettingsOpen(true)}
+            aria-label={`${profile.nickname} · ${t("sidebar.settings")}`}
+            title={t("sidebar.settings")}
           >
             <ProfileAvatar profile={profile} className="sidebar-account-avatar" />
             <strong>{profile.nickname}</strong>
@@ -1141,17 +1143,31 @@ export default function App() {
             <div className="composer-wrap">
               <div className="composer-stack">
                 {messages.length === 0 && (
-                  <button
-                    type="button"
-                    className={`composer-workspace ${workspace ? "selected" : ""}`}
-                    onClick={() => void chooseWorkspace()}
-                    disabled={loading || running}
-                    title={workspace ?? t("composer.selectProject")}
-                    aria-label={workspace ? t("composer.changeProject") : t("composer.selectProject")}
-                  >
-                    <FolderOpen size={15} />
-                    <span>{workspaceName ?? workspace ?? t("composer.selectProject")}</span>
-                  </button>
+                  <div className={`composer-workspace-context ${workspace ? "selected" : ""}`}>
+                    <button
+                      type="button"
+                      className="composer-workspace"
+                      onClick={() => void chooseWorkspace()}
+                      disabled={loading || running}
+                      title={workspace ?? t("composer.selectProject")}
+                      aria-label={workspace ? t("composer.changeProject") : t("composer.selectProject")}
+                    >
+                      <FolderOpen size={15} />
+                      <span>{workspaceName ?? t("composer.selectProject")}</span>
+                    </button>
+                    {workspace && (
+                      <button
+                        type="button"
+                        className="composer-workspace-clear"
+                        onClick={() => void clearWorkspace()}
+                        disabled={loading || running}
+                        title={t("composer.clearProject")}
+                        aria-label={t("composer.clearProject")}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
                 )}
                 <div className={`composer ${running ? "composer-running" : ""}`}>
                   {attachments.length > 0 && (
@@ -1201,10 +1217,11 @@ export default function App() {
                     </div>
                     <div className="composer-actions">
                       <ModelPicker
-                        provider={provider}
                         model={model}
                         models={availableModels}
+                        pinnedModelIds={pinnedModelIds}
                         onChange={(value) => void changeModel(value)}
+                        onPinnedModelIdsChange={(value) => void changePinnedModelIds(value)}
                       />
                       <button
                         className={`send-button ${running ? "stop-button" : ""}`}
@@ -2620,37 +2637,38 @@ function PermissionPicker({ value, modes, updating, disabled, onChange }: { valu
 }
 
 function ModelPicker({
-  provider,
   model,
   models,
+  pinnedModelIds,
   onChange,
+  onPinnedModelIdsChange,
 }: {
-  provider: string;
   model: string;
   models: AgentSnapshot["models"];
+  pinnedModelIds: string[];
   onChange(value: string): void;
+  onPinnedModelIdsChange(value: string[]): void;
 }) {
+  const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [activeProvider, setActiveProvider] = useState(provider);
-  const groupedModels = useMemo(() => {
+  const [query, setQuery] = useState("");
+  const options = useMemo(() => {
     const options = [...models];
-    if (!options.some((item) => item.provider === provider && item.id === model)) {
-      options.unshift({ provider: provider ?? "devin", id: model });
-    }
-    const grouped = new Map<string, AgentSnapshot["models"]>();
-    for (const item of options) {
-      const providerId = item.provider ?? "devin";
-      const group = grouped.get(providerId) ?? [];
-      group.push(item);
-      grouped.set(providerId, group);
-    }
-    return grouped;
-  }, [model, models, provider]);
+    if (model && !options.some((item) => item.id === model)) options.unshift({ provider: "devin", id: model });
+    return options;
+  }, [model, models]);
+  const organizedModels = useMemo(
+    () => organizeModels(options, pinnedModelIds, query),
+    [options, pinnedModelIds, query],
+  );
 
   useEffect(() => {
-    if (open) setActiveProvider(provider);
-  }, [open, provider]);
+    if (!open) return;
+    const frame = requestAnimationFrame(() => searchRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -2668,71 +2686,85 @@ function ModelPicker({
     };
   }, [open]);
 
-  const modelGroups = [...groupedModels.entries()];
+  const selectedModel = options.find((item) => item.id === model);
+  const visibleCount = organizedModels.pinned.length + organizedModels.others.length;
+
+  const renderModelOption = (item: AgentSnapshot["models"][number], pinned: boolean) => {
+    const selected = item.id === model;
+    const name = item.name ?? item.id;
+    return (
+      <div className={`model-option${selected ? " selected" : ""}${pinned ? " pinned" : ""}`} key={item.id}>
+        <button
+          type="button"
+          className="model-option-select"
+          onClick={() => {
+            onChange(item.id);
+            setOpen(false);
+          }}
+          role="menuitemradio"
+          aria-checked={selected}
+          title={item.description ?? item.id}
+        >
+          <span>{name}</span>
+          {selected && <Check size={14} />}
+        </button>
+        <button
+          type="button"
+          className="model-pin-button"
+          onClick={() => onPinnedModelIdsChange(togglePinnedModelId(pinnedModelIds, item.id))}
+          aria-label={t(pinned ? "model.unpin" : "model.pin", { model: name })}
+          title={t(pinned ? "model.unpin" : "model.pin", { model: name })}
+          aria-pressed={pinned}
+        >
+          <Pin size={13} fill={pinned ? "currentColor" : "none"} />
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="model-picker" ref={rootRef}>
       <button
         type="button"
         className={`model-trigger${open ? " open" : ""}`}
-        onClick={() => setOpen((current) => !current)}
-        aria-haspopup="menu"
+        onClick={() => setOpen((current) => {
+          if (!current) setQuery("");
+          return !current;
+        })}
+        aria-haspopup="dialog"
         aria-expanded={open}
-        title={`${provider} · ${model}`}
+        title={model}
       >
-        <span>{shortModel(models.find((item) => item.provider === provider && item.id === model)?.name ?? model)}</span>
+        <span>{shortModel(selectedModel?.name ?? model)}</span>
         <ChevronDown size={13} />
       </button>
       {open && (
-        <div className="model-menu" role="menu" aria-label="Models">
-          {modelGroups.map(([providerId, providerModels], providerIndex) => (
-            <div
-              className="model-provider-item"
-              key={providerId}
-              onMouseEnter={() => setActiveProvider(providerId)}
-              onFocus={() => setActiveProvider(providerId)}
-            >
-              <button
-                type="button"
-                className={`model-provider-button${activeProvider === providerId ? " active" : ""}`}
-                onClick={() => setActiveProvider(providerId)}
-                role="menuitem"
-                aria-haspopup="menu"
-              >
-                <span>{providerId}</span>
-                {providerId === provider ? <Check size={14} /> : <i />}
-                <ChevronRight size={14} />
-              </button>
-              {activeProvider === providerId && (
-                <div
-                  className={`model-submenu${providerIndex >= Math.floor(modelGroups.length / 2) ? " align-up" : ""}`}
-                  role="menu"
-                  aria-label={`${providerId} models`}
-                >
-                  {providerModels.map((item) => {
-                    const selected = item.provider === provider && item.id === model;
-                    return (
-                      <button
-                        type="button"
-                        className={selected ? "selected" : ""}
-                        key={`${item.provider}/${item.id}`}
-                        onClick={() => {
-                          onChange(`${item.provider}/${item.id}`);
-                          setOpen(false);
-                        }}
-                        role="menuitemradio"
-                        aria-checked={selected}
-                        title={item.description ?? item.id}
-                      >
-                        <span>{item.name ?? item.id}</span>
-                        {selected && <Check size={14} />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="model-menu" role="dialog" aria-label={t("model.models")}>
+          <label className="model-search">
+            <Search size={14} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t("model.search")}
+              aria-label={t("model.search")}
+            />
+          </label>
+          <div className="model-list" role="menu">
+            {organizedModels.pinned.length > 0 && (
+              <>
+                <div className="model-section-label">{t("model.pinned")}</div>
+                {organizedModels.pinned.map((item) => renderModelOption(item, true))}
+              </>
+            )}
+            {organizedModels.others.length > 0 && (
+              <>
+                {organizedModels.pinned.length > 0 && <div className="model-section-label">{t("model.all")}</div>}
+                {organizedModels.others.map((item) => renderModelOption(item, false))}
+              </>
+            )}
+            {visibleCount === 0 && <div className="model-empty">{t("model.noResults")}</div>}
+          </div>
         </div>
       )}
     </div>

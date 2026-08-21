@@ -185,6 +185,7 @@ export interface DesktopApi {
   platform: NodeJS.Platform;
   app: {
     version(): Promise<string>;
+    homeDirectory(): Promise<string>;
     openExternal(url: string): Promise<void>;
   };
   themes: {
@@ -201,6 +202,8 @@ export interface DesktopApi {
     setShowReasoningProcess(value: boolean): Promise<void>;
     getPersonalization(): Promise<PersonalizationSettings>;
     setPersonalization(personalization: PersonalizationSettings): Promise<void>;
+    getPinnedModelIds(): Promise<string[]>;
+    setPinnedModelIds(modelIds: string[]): Promise<void>;
     getDevinCliPath(): Promise<string | null>;
     setDevinCliPath(path: string | null): Promise<ProviderStatus>;
     chooseDevinCliPath(): Promise<ProviderStatus | null>;
