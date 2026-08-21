@@ -16,6 +16,7 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
   Bot,
+  Box,
   Check,
   ChevronDown,
   ChevronRight,
@@ -49,6 +50,7 @@ import {
   Search,
   Settings,
   Shield,
+  ShieldOff,
   Sparkles,
   Sun,
   TerminalSquare,
@@ -95,6 +97,7 @@ import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
 import { organizeModels, togglePinnedModelId } from "./lib/model-picker";
+import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import type { DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
@@ -1858,7 +1861,7 @@ function SettingsDialog(props: {
   consumeAuthCancellation(): boolean;
   onToast(message: string, type?: "info" | "error"): void;
 }) {
-  const { language, setLanguage, t } = useI18n();
+  const { language, locale, setLanguage, t } = useI18n();
   const [section, setSection] = useState<"general" | "models" | "agent" | "appearance" | "about">("general");
   const [busy, setBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
@@ -2171,8 +2174,8 @@ function SettingsDialog(props: {
           </>}
           {section === "agent" && <>
             <h2>{t("settings.agentTitle")}</h2><p>{t("settings.agentDescription")}</p>
-            <label className="setting-row"><span><strong>Devin session mode</strong><small>Options come from the active Devin session and organization policy.</small></span><select value={props.permission} disabled={props.modes.length === 0} onChange={(event) => props.onPermission(event.target.value)}>{props.modes.length === 0 && <option value="">Open a session to discover modes</option>}{props.modes.map((mode) => <option key={mode.id} value={mode.id}>{mode.name ?? mode.id}</option>)}</select></label>
-            <div className="setting-row"><span><strong>{t("settings.sandbox")}</strong><small>{window.devinAgent.platform === "win32" ? "Windows OS sandbox is not supported by Devin CLI; enforced sandbox sessions fail closed." : window.devinAgent.platform === "linux" ? "Managed by Devin CLI. Linux requires bwrap and socat; missing dependencies fail closed." : "Managed by Devin CLI and organization policy; Desktop never falls back to unsandboxed execution."}</small></span><strong>CLI managed</strong></div>
+            <label className="setting-row"><span><strong>{t("settings.sessionMode")}</strong><small>{t("settings.sessionModeDescription")}</small></span><select value={props.permission} disabled={props.modes.length === 0} onChange={(event) => props.onPermission(event.target.value)}>{props.modes.length === 0 && <option value="">{t("settings.sessionModeUnavailable")}</option>}{props.modes.map((mode) => <option key={mode.id} value={mode.id}>{getModePresentation(mode, locale).label}</option>)}</select></label>
+            <div className="setting-row"><span><strong>{t("settings.sandbox")}</strong><small>{window.devinAgent.platform === "win32" ? t("settings.sandboxWindowsDescription") : window.devinAgent.platform === "linux" ? t("settings.sandboxLinuxDescription") : t("settings.sandboxMacDescription")}</small></span><strong>{t("settings.sandboxCliManaged")}</strong></div>
           </>}
           {section === "appearance" && <>
             <h2>{t("settings.appearance")}</h2>
@@ -2632,9 +2635,11 @@ function AttachmentMenu({ disabled, onChange }: { disabled: boolean; onChange(ev
 }
 
 function PermissionPicker({ value, modes, updating, disabled, onChange }: { value: PermissionMode; modes: NonNullable<AgentSnapshot["modes"]>; updating: boolean; disabled: boolean; onChange(value: PermissionMode): void }) {
+  const { locale, t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const selected = modes.find((mode) => mode.id === value);
+  const selectedPresentation = selected ? getModePresentation(selected, locale) : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -2663,33 +2668,53 @@ function PermissionPicker({ value, modes, updating, disabled, onChange }: { valu
         aria-expanded={open}
         aria-busy={updating}
       >
-        {updating ? <LoaderCircle className="spin" size={13} /> : <Shield size={13} />}
-        <span>{selected?.name ?? (value || "CLI mode")}</span>
+        {updating ? <LoaderCircle className="spin" size={13} /> : <ModeIcon kind={selectedPresentation?.kind ?? "unknown"} size={13} />}
+        <span>{selectedPresentation?.label ?? (value || t("mode.cliMode"))}</span>
         <ChevronDown size={12} />
       </button>
       {open && (
         <div className="composer-popup-menu permission-menu" role="menu">
-          {modes.map((option) => (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.id === value}
-              className={`permission-option${option.id === value ? " selected" : ""}`}
-              key={option.id}
-              onClick={() => {
-                setOpen(false);
-                onChange(option.id);
-              }}
-            >
-              <span className="permission-option-icon"><Shield size={16} /></span>
-              <span className="permission-option-copy"><strong>{option.name ?? option.id}</strong>{option.description && <small>{option.description}</small>}</span>
-              {option.id === value && <Check size={15} />}
-            </button>
-          ))}
+          {modes.map((option) => {
+            const presentation = getModePresentation(option, locale);
+            return (
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.id === value}
+                className={`permission-option${option.id === value ? " selected" : ""}`}
+                key={option.id}
+                onClick={() => {
+                  setOpen(false);
+                  onChange(option.id);
+                }}
+              >
+                <span className="permission-option-icon"><ModeIcon kind={presentation.kind} size={17} /></span>
+                <span className="permission-option-copy"><strong>{presentation.label}</strong>{presentation.description && <small>{presentation.description}</small>}</span>
+                {option.id === value && <Check size={15} />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+function ModeIcon({ kind, size }: { kind: ModeKind; size: number }) {
+  const Icon = kind === "code"
+    ? Code2
+    : kind === "smart"
+      ? Sparkles
+      : kind === "ask"
+        ? MessageSquareText
+        : kind === "plan"
+          ? FileText
+          : kind === "bypass"
+            ? ShieldOff
+            : kind === "autonomous"
+              ? Box
+              : Shield;
+  return <Icon size={size} aria-hidden="true" />;
 }
 
 function ModelPicker({
