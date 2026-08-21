@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "image": true,
+      "audio": false,
+      "embeddedContext": true
+    },
+    "sessionCapabilities": {
+      "list": {},
+      "delete": {},
+      "resume": {},
+      "close": {},
+      "additionalDirectories": {}
+    },
+    "_meta": {
+      "fixtureVersion": "acp-v1"
+    }
+  },
+  "authMethods": [
+    {
+      "id": "browser",
+      "name": "Browser login",
+      "description": "Authenticate with Devin in the system browser"
+    }
+  ],
+  "_meta": {
+    "unknownExtension": {
+      "preserve": true
+    }
+  }
+}

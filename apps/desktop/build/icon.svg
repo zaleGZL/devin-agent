@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Devin Agent icon">
+  <rect width="512" height="512" rx="128" fill="#262622"/>
+  <path d="M118 154h99c81 0 139 39 139 102s-58 102-139 102h-99V154Zm78 62v80h21c38 0 61-13 61-40s-23-40-61-40h-21Z" fill="#f7f7f5"/>
+  <path d="M294 154h56v50h-56z" fill="#b8f06a"/>
+</svg>
