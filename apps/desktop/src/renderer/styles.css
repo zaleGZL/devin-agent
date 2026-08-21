@@ -41,10 +41,11 @@ button:disabled { cursor: default; opacity: .45; }
 .sidebar-collapsed > * { visibility: hidden; opacity: 0; transform: translateX(-8px); transition: visibility 0s linear .08s, opacity .08s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
 .sidebar-titlebar { height: 80px; min-height: 80px; position: relative; -webkit-app-region: drag; }
 .sidebar-titlebar button { -webkit-app-region: no-drag; }
-.sidebar-product-title { position: absolute; top: 42px; left: 10px; height: 30px; max-width: calc(100% - 58px); padding: 0 7px; display: flex; align-items: center; color: var(--ink); text-align: left; }
+.sidebar-product-title { position: absolute; top: 42px; left: 10px; height: 30px; max-width: calc(100% - 58px); padding: 0 7px; display: flex; align-items: center; gap: 7px; color: var(--ink); text-align: left; }
 .sidebar-product-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 650; letter-spacing: -.018em; }
 .sidebar-search-trigger { position: absolute; top: 42px; right: 10px; }
-.brand-mark { width: 22px; height: 22px; display: inline-block; flex: none; background: url("./assets/devin-agent-logo.svg") center / contain no-repeat; }
+.brand-mark { width: 22px; height: 22px; display: inline-block; flex: none; background: url("./assets/devin-agent-logo.png") center / contain no-repeat; }
+.brand-mark.sidebar-brand-mark { width: 20px; height: 20px; border-radius: 6px; }
 .brand-mark.large { width: 42px; height: 42px; }
 .brand-mark.about { width: 64px; height: 64px; margin-bottom: 12px; }
 .icon-button { width: 30px; height: 30px; display: inline-grid; place-items: center; border-radius: 6px; color: var(--muted); flex: none; }

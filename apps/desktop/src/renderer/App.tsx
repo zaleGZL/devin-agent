@@ -929,7 +929,10 @@ export default function App() {
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}`}>
       <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`} inert={!sidebarOpen}>
         <div className="sidebar-titlebar">
-          <div className="sidebar-product-title"><strong>Devin Agent</strong></div>
+          <div className="sidebar-product-title">
+            <span className="brand-mark sidebar-brand-mark" aria-hidden="true" />
+            <strong>Devin Agent</strong>
+          </div>
           <button
             className="icon-button sidebar-search-trigger"
             onClick={() => {

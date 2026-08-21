@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/devin-agent-brand.png" width="180" alt="Devin Coding Agent brand icon">
+</p>
+
 # Devin Coding Agent
 
 一个仅面向 Desktop 的本地 Coding Agent。界面与 provider 无关交互移植自 DSCode Desktop，Agent runtime 只有一个：用户本机安装的 Devin CLI，通过 ACP 协议连接。
