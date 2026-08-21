@@ -54,6 +54,7 @@ import {
   Settings,
   Shield,
   ShieldOff,
+  SquarePen,
   Sparkles,
   Sun,
   TerminalSquare,
@@ -100,7 +101,7 @@ import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
-import { organizeModels, togglePinnedModelId } from "./lib/model-picker";
+import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import type { DevinCapabilities } from "../shared/capabilities";
@@ -197,9 +198,20 @@ export default function App() {
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
   const activeSessionRef = useRef<string | undefined>(undefined);
+  const modelRef = useRef("");
+  const availableModelsRef = useRef<AgentSnapshot["models"]>([]);
+  const newSessionModelIdRef = useRef<string | null>(null);
   const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
   const runningSessionIdsRef = useRef(new Set<string>());
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
+
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
+
+  useEffect(() => {
+    availableModelsRef.current = availableModels;
+  }, [availableModels]);
 
   const selectActiveSession = useCallback((sessionId?: string) => {
     activeSessionRef.current = sessionId;
@@ -318,6 +330,7 @@ export default function App() {
   ) => {
     const background = behavior?.background === true;
     const nextProvider = overrides?.provider ?? provider;
+    const requestedNewSessionModel = sessionPath ? undefined : overrides?.model;
     const providerStatuses = behavior?.providerStatuses ?? providers;
     const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
     selectActiveSession(sessionPath);
@@ -335,7 +348,7 @@ export default function App() {
     if (providerStatuses.length && !status?.configured) {
       setSettingsOpen(true);
       setToast({ message: t("status.connectProvider", { provider: status?.name ?? nextProvider }), type: "error" });
-      return false;
+      return undefined;
     }
     if (!background) setLoading(true);
     if (!background) setSessionStats(undefined);
@@ -344,6 +357,7 @@ export default function App() {
         ...(cwd ? { cwd } : {}),
         project: Boolean(projectPath),
         provider: nextProvider,
+        ...(requestedNewSessionModel ? { model: requestedNewSessionModel } : {}),
         permission: overrides?.permission ?? permission,
         sandbox: overrides?.sandbox ?? sandbox,
         ...(sessionPath ? { sessionPath } : {}),
@@ -353,14 +367,14 @@ export default function App() {
       hydrateSnapshot(snapshot);
       markSessionRunning(nextSessionId, Boolean(snapshot.state.isStreaming));
       await refreshSessions();
-      return true;
+      return nextSessionId;
     } catch (error) {
-      if (isAgentSessionClosedError(error)) return false;
+      if (isAgentSessionClosedError(error)) return undefined;
       const message = error instanceof Error ? error.message : String(error);
       if (!background) setMessages([]);
       setToast({ message: cleanError(message), type: "error" });
       if (/not configured|credential|login|api key/i.test(message)) setSettingsOpen(true);
-      return false;
+      return undefined;
     } finally {
       if (!background) setLoading(false);
     }
@@ -369,7 +383,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, storedColorScheme, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, homeDirectory] = await Promise.all([
+      const [recentItems, allSessions, providerItems, storedColorScheme, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, storedNewSessionModelId, homeDirectory] = await Promise.all([
         window.devinAgent.workspace.recent(),
         window.devinAgent.sessions.list(),
         window.devinAgent.auth.status(),
@@ -377,6 +391,7 @@ export default function App() {
         window.devinAgent.settings.getProfile(),
         window.devinAgent.settings.getShowReasoningProcess(),
         window.devinAgent.settings.getPinnedModelIds(),
+        window.devinAgent.settings.getNewSessionModelId(),
         window.devinAgent.app.homeDirectory(),
       ]);
       if (cancelled) return;
@@ -387,12 +402,14 @@ export default function App() {
       setProfile(storedProfile);
       setShowReasoningProcess(storedShowReasoningProcess);
       setPinnedModelIds(storedPinnedModelIds);
+      newSessionModelIdRef.current = storedNewSessionModelId;
       applyColorScheme(storedColorScheme);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
         ?? providerItems.find((item) => item.configured);
       if (configured) {
         setProvider(configured.id);
-        if (configured.defaultModel) setModel(configured.defaultModel);
+        const initialModelId = storedNewSessionModelId ?? configured.defaultModel;
+        if (initialModelId) setModel(initialModelId);
       }
       const selectedSession = allSessions.find((session) => !session.archived);
       const selectedProject = selectedSession
@@ -433,7 +450,13 @@ export default function App() {
   useEffect(() => {
     const offEvent = window.devinAgent.agent.onEvent((event) => {
       const eventSessionId = typeof event.sessionId === "string" ? event.sessionId : undefined;
-      if (event.type === "agent_start") markSessionRunning(eventSessionId, true);
+      if (event.type === "agent_start") {
+        markSessionRunning(eventSessionId, true);
+        // The main process persists the first prompt title before emitting this
+        // event. Refresh immediately so a project task and its running marker
+        // appear while the turn is active, not only after it settles.
+        void refreshSessions();
+      }
       if (event.type === "agent_settled") {
         markSessionRunning(eventSessionId, false);
         if (eventSessionId) updateSessionMessages(eventSessionId, settleAssistantMessages);
@@ -657,35 +680,41 @@ export default function App() {
     const selected = await window.devinAgent.workspace.choose();
     if (!selected) return undefined;
     setWorkspaces(await window.devinAgent.workspace.recent());
-    setMessages([]);
-    selectActiveSession(undefined);
-    setExpandedProjects((current) => new Set(current).add(selected));
-    await startAgent(selected, undefined, undefined, selected);
-    textareaRef.current?.focus();
+    await createThreadInProject(selected);
     return selected;
   };
 
   const createNewThread = async () => {
     const projectPath = workspaceRef.current;
+    await createThreadInProject(projectPath);
+  };
+
+  const createThreadInProject = async (projectPath?: string) => {
     const homeDirectory = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
     homeDirectoryRef.current = homeDirectory;
     const cwd = resolveNewTaskCwd(projectPath, homeDirectory);
+    activeCwdRef.current = cwd;
+    workspaceRef.current = projectPath;
+    setWorkspace(projectPath);
     setMessages([]);
     selectActiveSession(undefined);
+    setModel(resolveNewSessionModelId(
+      newSessionModelIdRef.current,
+      availableModelsRef.current,
+      modelRef.current,
+    ));
     setAgentPlan(undefined);
-    await startAgent(cwd, undefined, undefined, projectPath);
+    setSessionLocked(false);
+    setSessionStats(undefined);
+    setUiRequest(undefined);
+    setAttachments([]);
+    if (projectPath) setExpandedProjects((current) => new Set(current).add(projectPath));
     textareaRef.current?.focus();
   };
 
   const clearWorkspace = async () => {
     if (!workspace || loading || running) return;
-    const cwd = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
-    homeDirectoryRef.current = cwd;
-    setMessages([]);
-    selectActiveSession(undefined);
-    setAgentPlan(undefined);
-    await startAgent(cwd, undefined, undefined, undefined);
-    textareaRef.current?.focus();
+    await createThreadInProject(undefined);
   };
 
   const toggleWorkspace = (item: WorkspaceItem) => {
@@ -743,21 +772,72 @@ export default function App() {
       setToast({ message: "The current Devin session or model does not advertise image input.", type: "error" });
       return;
     }
-    const alreadyRunning = running;
-    const targetSessionId = activeSessionRef.current;
-    if (!targetSessionId) return;
+    let alreadyRunning = running;
+    let targetSessionId = activeSessionRef.current;
+    if (!targetSessionId) {
+      const cwd = activeCwdRef.current ?? homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
+      const projectPath = workspaceRef.current;
+      const desiredModel = model;
+      const desiredPermission = permission;
+      targetSessionId = await startAgent(
+        cwd,
+        undefined,
+        { provider, model: desiredModel, permission: desiredPermission, sandbox },
+        projectPath,
+      );
+      if (!targetSessionId) return;
+      alreadyRunning = false;
+      try {
+        if (desiredModel) {
+          await window.devinAgent.agent.command("set_model", { provider: "devin", modelId: desiredModel });
+          setModel(desiredModel);
+          const previousNewSessionModelId = newSessionModelIdRef.current;
+          newSessionModelIdRef.current = desiredModel;
+          try {
+            await window.devinAgent.settings.setNewSessionModelId(desiredModel);
+          } catch (error) {
+            newSessionModelIdRef.current = previousNewSessionModelId;
+            setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+          }
+        }
+        if (desiredPermission && availableModes.some((mode) => mode.id === desiredPermission)) {
+          await window.devinAgent.agent.command("set_mode", { modeId: desiredPermission });
+          setPermission(desiredPermission);
+        }
+      } catch (error) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+        return;
+      }
+    }
     followingConversationTailRef.current = true;
     setDraft("");
     const queued = alreadyRunning;
     const messageImages = attachments.map(({ data, mimeType }) => ({ data, mimeType }));
     updateSessionMessages(targetSessionId, (current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
     const sentAt = new Date().toISOString();
-    setSessions((current) => current.map((session) => session.path === targetSessionId ? {
-      ...session,
-      title: session.messageCount ? session.title : crop(text || t("composer.attachedImage"), 80),
-      updatedAt: sentAt,
-      messageCount: (session.messageCount ?? 0) + 1,
-    } : session));
+    setSessions((current) => {
+      const title = crop(text || t("composer.attachedImage"), 80);
+      const existing = current.find((session) => session.path === targetSessionId);
+      if (existing) {
+        return current.map((session) => session.path === targetSessionId ? {
+          ...session,
+          title: session.messageCount ? session.title : title,
+          updatedAt: sentAt,
+          messageCount: (session.messageCount ?? 0) + 1,
+        } : session);
+      }
+      const cwd = activeCwdRef.current;
+      return cwd ? [{
+        id: targetSessionId,
+        path: targetSessionId,
+        cwd,
+        title,
+        createdAt: sentAt,
+        updatedAt: sentAt,
+        provider: "devin",
+        messageCount: 1,
+      }, ...current] : current;
+    });
     const images = messageImages.map((image) => ({ type: "image", ...image }));
     setAttachments([]);
     markSessionRunning(targetSessionId, true);
@@ -842,6 +922,12 @@ export default function App() {
   const changeModel = async (value: string) => {
     const selected = availableModels.find((candidate) => candidate.id === value);
     if (!selected) return;
+    if (!activeSessionRef.current) {
+      setProvider("devin");
+      setModel(selected.id);
+      if (!selected.supportsImages) setAttachments([]);
+      return;
+    }
     try {
       await window.devinAgent.agent.command("set_model", { provider: "devin", modelId: selected.id });
       setProvider("devin");
@@ -867,6 +953,10 @@ export default function App() {
 
   const changePermission = async (next: PermissionMode) => {
     if (next === permission || permissionUpdating) return;
+    if (!activeSessionRef.current) {
+      setPermission(next);
+      return;
+    }
     const previous = permission;
     setPermission(next);
     setPermissionUpdating(true);
@@ -1070,17 +1160,28 @@ export default function App() {
               const isExpanded = expandedProjects.has(item.path) || Boolean(query);
               const showAll = fullyExpandedProjects.has(item.path) || Boolean(query);
               const visibleTasks = showAll ? taskSource : taskSource.slice(0, PROJECT_TASK_PREVIEW_COUNT);
+              const projectIsActive = workspace === item.path && !activeSession;
               return (
                 <div className="project-group" key={item.path}>
-                  <button
-                    className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
-                    onClick={() => toggleWorkspace(item)}
-                    title={item.path}
-                    aria-expanded={isExpanded}
-                  >
-                    {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                    <strong>{item.name}</strong>
-                  </button>
+                  <div className={`project-row-shell${projectIsActive ? " active" : ""}`}>
+                    <button
+                      className="project-row"
+                      onClick={() => toggleWorkspace(item)}
+                      title={item.path}
+                      aria-expanded={isExpanded}
+                    >
+                      {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                      <strong>{item.name}</strong>
+                    </button>
+                    <button
+                      className="project-new-thread"
+                      onClick={() => void createThreadInProject(item.path)}
+                      aria-label={t("sidebar.newProjectThread", { project: item.name })}
+                      title={t("sidebar.newProjectThread", { project: item.name })}
+                    >
+                      <SquarePen size={15} />
+                    </button>
+                  </div>
                   {isExpanded && (
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
@@ -1403,6 +1504,7 @@ export default function App() {
             setProviders(nextProviders);
             setProvider(value);
             setModel(nextModel);
+            if (!activeSession) return;
             await startAgent(
               activeCwdRef.current,
               activeSession,

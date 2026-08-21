@@ -29,3 +29,17 @@ export function togglePinnedModelId(pinnedModelIds: string[], modelId: string, l
     ? pinnedModelIds.filter((id) => id !== modelId)
     : [modelId, ...pinnedModelIds.filter((id) => id !== modelId)].slice(0, limit);
 }
+
+export function resolveNewSessionModelId(
+  preferredModelId: string | null | undefined,
+  models: ModelPickerItem[],
+  fallbackModelId: string | null | undefined,
+): string {
+  const availableIds = new Set(models.map((model) => model.id));
+  const isAvailable = (modelId: string | null | undefined) => Boolean(
+    modelId && (availableIds.size === 0 || availableIds.has(modelId)),
+  );
+  if (isAvailable(preferredModelId)) return preferredModelId!;
+  if (isAvailable(fallbackModelId)) return fallbackModelId!;
+  return models[0]?.id ?? preferredModelId ?? fallbackModelId ?? "";
+}

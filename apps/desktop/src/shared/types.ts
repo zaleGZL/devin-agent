@@ -166,6 +166,8 @@ export interface DesktopApi {
     setShowReasoningProcess(value: boolean): Promise<void>;
     getPinnedModelIds(): Promise<string[]>;
     setPinnedModelIds(modelIds: string[]): Promise<void>;
+    getNewSessionModelId(): Promise<string | null>;
+    setNewSessionModelId(modelId: string): Promise<void>;
     getDevinCliPath(): Promise<string | null>;
     setDevinCliPath(path: string | null): Promise<ProviderStatus>;
     chooseDevinCliPath(): Promise<ProviderStatus | null>;

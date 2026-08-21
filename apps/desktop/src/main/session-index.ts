@@ -24,10 +24,51 @@ export async function upsertSessionSummary(summary: SessionSummary): Promise<Ses
   const items = await readIndex();
   const existing = items.findIndex((item) => item.id === summary.id);
   const next = existing >= 0
-    ? items.map((item, index) => index === existing ? { ...item, ...summary } : item)
+    ? items.map((item, index) => index === existing ? mergeSessionSummary(item, summary) : item)
     : [summary, ...items];
   await writeIndex(next.slice(0, 500));
   return next;
+}
+
+/**
+ * ACP session/list summaries do not always include local presentation fields
+ * such as messageCount and may temporarily omit cwd while a new turn is
+ * running. Those partial snapshots must never detach a task from its project
+ * or replace the optimistic first-prompt title with stale server metadata.
+ */
+export function mergeSessionSummary(existing: SessionSummary, incoming: SessionSummary): SessionSummary {
+  const incomingHasLocalConversationState = incoming.messageCount !== undefined;
+  const existingHasLocalConversationState = (existing.messageCount ?? 0) > 0;
+  const updatedAt = laterIsoDate(existing.updatedAt, incoming.updatedAt);
+  return {
+    ...existing,
+    ...incoming,
+    cwd: incoming.cwd.trim() || existing.cwd,
+    title: existingHasLocalConversationState && !incomingHasLocalConversationState
+      ? existing.title
+      : incoming.title.trim() || existing.title,
+    createdAt: earlierIsoDate(existing.createdAt, incoming.createdAt),
+    updatedAt,
+    ...(existing.messageCount !== undefined && incoming.messageCount === undefined
+      ? { messageCount: existing.messageCount }
+      : {}),
+    ...(existing.preview !== undefined && incoming.preview === undefined
+      ? { preview: existing.preview }
+      : {}),
+  };
+}
+
+function earlierIsoDate(first: string, second: string): string {
+  return isoTimestamp(first) <= isoTimestamp(second) ? first : second;
+}
+
+function laterIsoDate(first: string, second: string): string {
+  return isoTimestamp(first) >= isoTimestamp(second) ? first : second;
+}
+
+function isoTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 export async function removeSessionSummary(id: string): Promise<SessionSummary[]> {

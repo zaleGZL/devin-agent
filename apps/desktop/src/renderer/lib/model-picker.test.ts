@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { organizeModels, togglePinnedModelId } from "./model-picker";
+import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./model-picker";
 
 const models = [
   { id: "opus", name: "Claude Opus" },
@@ -25,5 +25,12 @@ describe("model picker ordering", () => {
   it("pins newest first, unpins in place, and respects the limit", () => {
     expect(togglePinnedModelId(["a", "b"], "c", 2)).toEqual(["c", "a"]);
     expect(togglePinnedModelId(["a", "b"], "a")).toEqual(["b"]);
+  });
+
+  it("uses the global new-session preference without letting unavailable ids break creation", () => {
+    expect(resolveNewSessionModelId("glm", models, "opus")).toBe("glm");
+    expect(resolveNewSessionModelId("removed", models, "opus")).toBe("opus");
+    expect(resolveNewSessionModelId("removed", models, "also-removed")).toBe("opus");
+    expect(resolveNewSessionModelId("future-model", [], "")).toBe("future-model");
   });
 });

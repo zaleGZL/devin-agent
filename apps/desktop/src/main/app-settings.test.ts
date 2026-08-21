@@ -107,4 +107,14 @@ describe("AppSettings", () => {
     await expect(settings.setPinnedModelIds([""]))
       .rejects.toThrow(/non-empty/i);
   });
+
+  it("persists one global model for newly created sessions", async () => {
+    const settings = new AppSettings(file);
+    expect(await settings.getNewSessionModelId()).toBeNull();
+
+    await settings.setNewSessionModelId("  swe-1-7-medium  ");
+    expect(await settings.getNewSessionModelId()).toBe("swe-1-7-medium");
+    await expect(settings.setNewSessionModelId("  ")).rejects.toThrow(/non-empty/i);
+    await expect(settings.setNewSessionModelId("m".repeat(201))).rejects.toThrow(/non-empty/i);
+  });
 });

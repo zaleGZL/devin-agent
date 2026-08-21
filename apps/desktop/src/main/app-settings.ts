@@ -10,6 +10,7 @@ interface AppSettingsData {
   showReasoningProcess?: boolean;
   devinCliPath?: string | null;
   pinnedModelIds?: string[];
+  newSessionModelId?: string;
 }
 
 const LANGUAGE_PREFERENCES = new Set<LanguagePreference>(["system", "zh-CN", "en"]);
@@ -109,6 +110,19 @@ export class AppSettings {
     await this.write(data);
   }
 
+  async getNewSessionModelId(): Promise<string | null> {
+    const data = await this.read();
+    return normalizeModelId(data.newSessionModelId);
+  }
+
+  async setNewSessionModelId(modelId: string): Promise<void> {
+    const normalized = normalizeModelId(modelId);
+    if (!normalized) throw new Error("New session model id must be a non-empty string");
+    const data = await this.read();
+    data.newSessionModelId = normalized;
+    await this.write(data);
+  }
+
   private async read(): Promise<AppSettingsData> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.file, "utf8")) as unknown;
@@ -152,4 +166,10 @@ function normalizePinnedModelIds(value: unknown): string[] {
     if (normalized.length === MAX_PINNED_MODELS) break;
   }
   return normalized;
+}
+
+function normalizeModelId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const modelId = value.trim();
+  return modelId && modelId.length <= MAX_MODEL_ID_LENGTH ? modelId : null;
 }

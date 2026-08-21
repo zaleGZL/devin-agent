@@ -6,6 +6,7 @@ import {
   archiveSession,
   configureSessionIndex,
   listSessions,
+  mergeSessionSummary,
   readSessionSummary,
   unarchiveSession,
   upsertSessionSummary,
@@ -49,5 +50,35 @@ describe("session index", () => {
     await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: true })]);
     await expect(unarchiveSession("session-1")).resolves.toMatchObject({ archived: false });
     await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: false })]);
+  });
+
+  it("keeps project membership and optimistic conversation metadata when ACP returns a partial summary", () => {
+    const local = {
+      id: "session-1",
+      path: "session-1",
+      cwd: "/tmp/project",
+      title: "Introduce this project",
+      createdAt: "2026-08-21T10:00:00.000Z",
+      updatedAt: "2026-08-21T10:00:03.000Z",
+      messageCount: 1,
+      preview: "Introduce this project",
+    };
+
+    expect(mergeSessionSummary(local, {
+      id: "session-1",
+      path: "session-1",
+      cwd: "",
+      title: "session-1",
+      createdAt: "2026-08-21T10:00:01.000Z",
+      updatedAt: "2026-08-21T10:00:01.000Z",
+      provider: "devin",
+    })).toMatchObject({
+      cwd: "/tmp/project",
+      title: "Introduce this project",
+      createdAt: "2026-08-21T10:00:00.000Z",
+      updatedAt: "2026-08-21T10:00:03.000Z",
+      messageCount: 1,
+      preview: "Introduce this project",
+    });
   });
 });
