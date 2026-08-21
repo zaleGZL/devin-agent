@@ -1,22 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { TONE_PRESETS } from "../shared/types";
-import type { LanguagePreference, PersonalizationSettings, TonePreset, UserProfile } from "../shared/types";
+import type { LanguagePreference, UserProfile } from "../shared/types";
 
 interface AppSettingsData {
   themeId?: string | null;
   language?: LanguagePreference;
   profile?: UserProfile;
   showReasoningProcess?: boolean;
-  personalization?: PersonalizationSettings;
   devinCliPath?: string | null;
   pinnedModelIds?: string[];
 }
 
 const LANGUAGE_PREFERENCES = new Set<LanguagePreference>(["system", "zh-CN", "en"]);
-const TONE_PRESET_SET = new Set<TonePreset>(TONE_PRESETS);
-const MAX_CUSTOM_INSTRUCTION_LENGTH = 1_500;
 const MAX_PINNED_MODELS = 32;
 const MAX_MODEL_ID_LENGTH = 200;
 
@@ -58,35 +54,6 @@ export class AppSettings {
     if (typeof showReasoningProcess !== "boolean") throw new Error("Reasoning process preference must be a boolean");
     const data = await this.read();
     data.showReasoningProcess = showReasoningProcess;
-    await this.write(data);
-  }
-
-  async getPersonalization(): Promise<PersonalizationSettings> {
-    const data = await this.read();
-    const tone = TONE_PRESET_SET.has(data.personalization?.tone as TonePreset)
-      ? data.personalization!.tone
-      : "default";
-    const storedInstructions = data.personalization?.customInstructions;
-    const customInstructions = typeof storedInstructions === "string"
-      && unicodeLength(storedInstructions.trim()) <= MAX_CUSTOM_INSTRUCTION_LENGTH
-      ? storedInstructions.trim()
-      : "";
-    return { tone, customInstructions };
-  }
-
-  async setPersonalization(personalization: PersonalizationSettings): Promise<void> {
-    if (!personalization || !TONE_PRESET_SET.has(personalization.tone)) {
-      throw new Error("Unsupported tone preset");
-    }
-    if (typeof personalization.customInstructions !== "string") {
-      throw new Error("Custom instructions must be text");
-    }
-    const customInstructions = personalization.customInstructions.trim();
-    if (unicodeLength(customInstructions) > MAX_CUSTOM_INSTRUCTION_LENGTH) {
-      throw new Error(`Custom instructions must be ${MAX_CUSTOM_INSTRUCTION_LENGTH} characters or fewer`);
-    }
-    const data = await this.read();
-    data.personalization = { tone: personalization.tone, customInstructions };
     await this.write(data);
   }
 
@@ -168,10 +135,6 @@ function isValidAvatarDataUrl(value: unknown): value is string {
   return typeof value === "string"
     && value.length <= 1_000_000
     && /^data:image\/(?:png|jpeg|webp);base64,/.test(value);
-}
-
-function unicodeLength(value: string): number {
-  return Array.from(value).length;
 }
 
 function normalizePinnedModelIds(value: unknown): string[] {

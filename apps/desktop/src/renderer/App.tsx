@@ -59,9 +59,9 @@ import type {
   AgentSnapshot,
   AgentSessionStats,
   AuthUiEvent,
+  DevinCliUpdateStatus,
   ExtensionUiRequest,
   LanguagePreference,
-  PersonalizationSettings,
   PermissionMode,
   ProviderId,
   ProviderStatus,
@@ -69,7 +69,6 @@ import type {
   SandboxMode,
   SessionSummary,
   ThemeSummary,
-  TonePreset,
   UserProfile,
   WorkspaceItem,
 } from "../shared/types";
@@ -122,22 +121,6 @@ const MIN_INSPECTOR_WIDTH = 320;
 const MAX_INSPECTOR_WIDTH = 880;
 const MIN_CONVERSATION_WIDTH = 440;
 const INSPECTOR_RESIZER_WIDTH = 7;
-const MAX_CUSTOM_INSTRUCTION_LENGTH = 1_500;
-const PERSONALIZATION_TONES = [
-  { id: "default", label: "settings.toneDefault", description: "settings.toneDefaultDescription" },
-  { id: "professional", label: "settings.toneProfessional", description: "settings.toneProfessionalDescription" },
-  { id: "friendly", label: "settings.toneFriendly", description: "settings.toneFriendlyDescription" },
-  { id: "candid", label: "settings.toneCandid", description: "settings.toneCandidDescription" },
-  { id: "quirky", label: "settings.toneQuirky", description: "settings.toneQuirkyDescription" },
-  { id: "efficient", label: "settings.toneEfficient", description: "settings.toneEfficientDescription" },
-  { id: "cynical", label: "settings.toneCynical", description: "settings.toneCynicalDescription" },
-  { id: "inspiring", label: "settings.toneInspiring", description: "settings.toneInspiringDescription" },
-] as const satisfies ReadonlyArray<{ id: TonePreset; label: string; description: string }>;
-
-function unicodeLength(value: string): number {
-  return Array.from(value).length;
-}
-
 function inspectorBoundsForLayout(layoutWidth: number) {
   const availableWidth = layoutWidth - MIN_CONVERSATION_WIDTH - INSPECTOR_RESIZER_WIDTH;
   return {
@@ -161,7 +144,6 @@ export default function App() {
   const [themeId, setThemeId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>({ nickname: "User" });
   const [showReasoningProcess, setShowReasoningProcess] = useState(false);
-  const [personalization, setPersonalization] = useState<PersonalizationSettings>({ tone: "default", customInstructions: "" });
   const [model, setModel] = useState("");
   const [permission, setPermission] = useState<PermissionMode>("");
   const [sandbox] = useState<SandboxMode>("cli-managed");
@@ -341,7 +323,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPersonalization, storedPinnedModelIds, homeDirectory] = await Promise.all([
+      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, homeDirectory] = await Promise.all([
         window.devinAgent.workspace.recent(),
         window.devinAgent.sessions.list(),
         window.devinAgent.auth.status(),
@@ -349,7 +331,6 @@ export default function App() {
         window.devinAgent.themes.getActive(),
         window.devinAgent.settings.getProfile(),
         window.devinAgent.settings.getShowReasoningProcess(),
-        window.devinAgent.settings.getPersonalization(),
         window.devinAgent.settings.getPinnedModelIds(),
         window.devinAgent.app.homeDirectory(),
       ]);
@@ -361,7 +342,6 @@ export default function App() {
       setThemeId(activeThemeId);
       setProfile(storedProfile);
       setShowReasoningProcess(storedShowReasoningProcess);
-      setPersonalization(storedPersonalization);
       setPinnedModelIds(storedPinnedModelIds);
       applyTheme(themeItems.find((item) => item.id === activeThemeId) ?? null);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
@@ -1286,14 +1266,15 @@ export default function App() {
       {settingsOpen && (
         <SettingsDialog
           providers={providers}
-          provider={provider}
+          model={model}
+          models={availableModels}
+          pinnedModelIds={pinnedModelIds}
           permission={permission}
           modes={availableModes}
           themes={themes}
           themeId={themeId}
           profile={profile}
           showReasoningProcess={showReasoningProcess}
-          personalization={personalization}
           onClose={() => setSettingsOpen(false)}
           onRefresh={async () => setProviders(await window.devinAgent.auth.status())}
           onConnected={async (value) => {
@@ -1312,6 +1293,7 @@ export default function App() {
             );
           }}
           onPermission={(value) => void changePermission(value)}
+          onPinnedModelIdsChange={(value) => void changePinnedModelIds(value)}
           onTheme={(id) => void changeTheme(id)}
           onRefreshThemes={() => void refreshThemes()}
           onProfile={async (nextProfile) => {
@@ -1327,10 +1309,6 @@ export default function App() {
               setShowReasoningProcess(previous);
               throw error;
             }
-          }}
-          onPersonalization={async (nextPersonalization) => {
-            await window.devinAgent.settings.setPersonalization(nextPersonalization);
-            setPersonalization(nextPersonalization);
           }}
           onAuthStart={() => { authCancellationRef.current = false; }}
           consumeAuthCancellation={() => {
@@ -1858,57 +1836,96 @@ function ProfileAvatar({ profile, className }: { profile: UserProfile; className
 
 function SettingsDialog(props: {
   providers: ProviderStatus[];
-  provider: ProviderId;
+  model: string;
+  models: AgentSnapshot["models"];
+  pinnedModelIds: string[];
   permission: PermissionMode;
   modes: NonNullable<AgentSnapshot["modes"]>;
   themes: ThemeSummary[];
   themeId: string | null;
   profile: UserProfile;
   showReasoningProcess: boolean;
-  personalization: PersonalizationSettings;
   onClose(): void;
   onRefresh(): Promise<void>;
   onConnected(value: ProviderId): Promise<void>;
   onPermission(value: PermissionMode): void;
+  onPinnedModelIdsChange(value: string[]): void;
   onTheme(id: string | null): void;
   onRefreshThemes(): void;
   onProfile(profile: UserProfile): Promise<void>;
   onShowReasoningProcess(value: boolean): Promise<void>;
-  onPersonalization(personalization: PersonalizationSettings): Promise<void>;
   onAuthStart(): void;
   consumeAuthCancellation(): boolean;
   onToast(message: string, type?: "info" | "error"): void;
 }) {
   const { language, setLanguage, t } = useI18n();
-  const [section, setSection] = useState<"general" | "personalization" | "models" | "agent" | "appearance" | "about">("general");
-  const [selected, setSelected] = useState<ProviderId>(props.provider);
+  const [section, setSection] = useState<"general" | "models" | "agent" | "appearance" | "about">("general");
   const [busy, setBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [reasoningPreferenceBusy, setReasoningPreferenceBusy] = useState(false);
-  const [personalizationBusy, setPersonalizationBusy] = useState(false);
-  const [personalizationTone, setPersonalizationTone] = useState<TonePreset>(props.personalization.tone);
-  const [customInstructions, setCustomInstructions] = useState(props.personalization.customInstructions);
   const [profileNickname, setProfileNickname] = useState(props.profile.nickname);
   const [profileAvatar, setProfileAvatar] = useState(props.profile.avatarDataUrl);
   const [cliPath, setCliPath] = useState("");
-  const selectedProvider = props.providers.find((provider) => provider.id === selected);
-  const selectedTone = PERSONALIZATION_TONES.find((tone) => tone.id === personalizationTone) ?? PERSONALIZATION_TONES[0];
-  const customInstructionLength = unicodeLength(customInstructions);
-  const personalizationChanged = personalizationTone !== props.personalization.tone
-    || customInstructions.trim() !== props.personalization.customInstructions;
+  const [detectedCliPath, setDetectedCliPath] = useState("");
+  const [modelQuery, setModelQuery] = useState("");
+  const [cliUpdateStatus, setCliUpdateStatus] = useState<DevinCliUpdateStatus>();
+  const [cliUpdateChecking, setCliUpdateChecking] = useState(false);
+  const [cliUpdating, setCliUpdating] = useState(false);
+  const cliUpdateRequestRef = useRef(0);
+  const selectedProvider = props.providers.find((provider) => provider.id === "devin") ?? props.providers[0];
+  const organizedModels = useMemo(
+    () => organizeModels(props.models, props.pinnedModelIds, modelQuery),
+    [modelQuery, props.models, props.pinnedModelIds],
+  );
+  const visibleModelCount = organizedModels.pinned.length + organizedModels.others.length;
+  const cliPathChanged = cliPath.trim() !== detectedCliPath;
+  const runtimeBusy = busy || cliUpdating;
 
   useEffect(() => {
-    void window.devinAgent.settings.getDevinCliPath().then((value) => setCliPath(value ?? selectedProvider?.binaryPath ?? ""));
+    void window.devinAgent.settings.getDevinCliPath().then((value) => {
+      const nextPath = value ?? selectedProvider?.binaryPath ?? "";
+      setCliPath(nextPath);
+      setDetectedCliPath(nextPath);
+    });
   }, [selectedProvider?.binaryPath]);
+
+  const refreshCliUpdateStatus = useCallback(async () => {
+    const requestId = ++cliUpdateRequestRef.current;
+    if (!selectedProvider?.configured) {
+      setCliUpdateStatus(undefined);
+      setCliUpdateChecking(false);
+      return;
+    }
+    setCliUpdateChecking(true);
+    try {
+      const status = await window.devinAgent.settings.getDevinCliUpdateStatus();
+      if (requestId === cliUpdateRequestRef.current) setCliUpdateStatus(status);
+    } catch (error) {
+      if (requestId === cliUpdateRequestRef.current) setCliUpdateStatus({
+        currentVersion: selectedProvider.version ?? "",
+        state: "unavailable",
+        checkedAt: new Date().toISOString(),
+        message: cleanError(error instanceof Error ? error.message : String(error)),
+      });
+    } finally {
+      if (requestId === cliUpdateRequestRef.current) setCliUpdateChecking(false);
+    }
+  }, [selectedProvider?.configured, selectedProvider?.version]);
+
+  useEffect(() => {
+    if (section !== "models") return;
+    void refreshCliUpdateStatus();
+  }, [refreshCliUpdateStatus, section, selectedProvider?.binaryPath]);
 
   const connect = async () => {
     setBusy(true);
     try {
       props.onAuthStart();
-      const connected = await window.devinAgent.auth.login(selected);
+      const providerId = selectedProvider?.id ?? "devin";
+      const connected = await window.devinAgent.auth.login(providerId);
       if (props.consumeAuthCancellation() || !connected) return;
-      await props.onConnected(selected);
-      props.onToast(t("settings.providerConnected", { provider: selectedProvider?.name ?? selected }));
+      await props.onConnected(providerId);
+      props.onToast(t("settings.providerConnected", { provider: selectedProvider?.name ?? providerId }));
     } catch (error) {
       if (props.consumeAuthCancellation() || isAuthPromptCancelledError(error)) return;
       props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
@@ -1921,7 +1938,9 @@ function SettingsDialog(props: {
     setBusy(true);
     try {
       const status = await window.devinAgent.settings.setDevinCliPath(value);
-      setCliPath(status.binaryPath ?? "");
+      const nextPath = status.binaryPath ?? "";
+      setCliPath(nextPath);
+      setDetectedCliPath(nextPath);
       await props.onRefresh();
       props.onToast(`Devin CLI ${status.version ?? ""} detected.`.trim());
     } catch (error) {
@@ -1936,7 +1955,9 @@ function SettingsDialog(props: {
     try {
       const status = await window.devinAgent.settings.chooseDevinCliPath();
       if (!status) return;
-      setCliPath(status.binaryPath ?? "");
+      const nextPath = status.binaryPath ?? "";
+      setCliPath(nextPath);
+      setDetectedCliPath(nextPath);
       await props.onRefresh();
       props.onToast(`Devin CLI ${status.version ?? ""} detected.`.trim());
     } catch (error) {
@@ -1956,6 +1977,21 @@ function SettingsDialog(props: {
       props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const updateCli = async () => {
+    setCliUpdating(true);
+    try {
+      const status = await window.devinAgent.settings.updateDevinCli();
+      setCliUpdateStatus(status);
+      await props.onRefresh();
+      props.onToast(t("settings.cliUpdated", { version: status.currentVersion }));
+    } catch (error) {
+      props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
+      await refreshCliUpdateStatus();
+    } finally {
+      setCliUpdating(false);
     }
   };
 
@@ -2005,27 +2041,6 @@ function SettingsDialog(props: {
     }
   };
 
-  const changeCustomInstructions = (value: string) => {
-    setCustomInstructions(Array.from(value).slice(0, MAX_CUSTOM_INSTRUCTION_LENGTH).join(""));
-  };
-
-  const savePersonalization = async () => {
-    const nextPersonalization = {
-      tone: personalizationTone,
-      customInstructions: customInstructions.trim(),
-    } satisfies PersonalizationSettings;
-    setPersonalizationBusy(true);
-    try {
-      await props.onPersonalization(nextPersonalization);
-      setCustomInstructions(nextPersonalization.customInstructions);
-      props.onToast(t("settings.personalizationSaved"));
-    } catch (error) {
-      props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
-    } finally {
-      setPersonalizationBusy(false);
-    }
-  };
-
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
       <div className="settings-dialog">
@@ -2033,7 +2048,6 @@ function SettingsDialog(props: {
         <aside>
           <div className="settings-title">{t("settings.title")}</div>
           <button className={section === "general" ? "active" : ""} onClick={() => setSection("general")}><Languages size={16} /> {t("settings.general")}</button>
-          <button className={section === "personalization" ? "active" : ""} onClick={() => setSection("personalization")}><Sparkles size={16} /> {t("settings.personalization")}</button>
           <button className={section === "models" ? "active" : ""} onClick={() => setSection("models")}><Bot size={16} /> {t("settings.models")}</button>
           <button className={section === "agent" ? "active" : ""} onClick={() => setSection("agent")}><TerminalSquare size={16} /> {t("settings.agent")}</button>
           <button className={section === "appearance" ? "active" : ""} onClick={() => setSection("appearance")}><Sun size={16} /> {t("settings.appearance")}</button>
@@ -2083,69 +2097,79 @@ function SettingsDialog(props: {
               />
             </label>
           </>}
-          {section === "personalization" && <>
-            <h2>{t("settings.personalization")}</h2><p>{t("settings.personalizationDescription")}</p>
-            <label className="setting-row personalization-tone-row">
-              <span>
-                <strong>{t("settings.basicStyleAndTone")}</strong>
-                <small>{t("settings.basicStyleAndToneDescription")}</small>
-              </span>
-              <span className="personalization-tone-control">
-                <select value={personalizationTone} onChange={(event) => setPersonalizationTone(event.target.value as TonePreset)}>
-                  {PERSONALIZATION_TONES.map((tone) => <option key={tone.id} value={tone.id}>{t(tone.label)}</option>)}
-                </select>
-                <small>{t(selectedTone.description)}</small>
-              </span>
-            </label>
-            <div className="personalization-editor">
-              <div className="personalization-editor-heading">
-                <strong>{t("settings.customInstructions")}</strong>
-                <small>{t("settings.customInstructionsDescription")}</small>
-              </div>
-              <textarea
-                value={customInstructions}
-                placeholder={t("settings.customInstructionsPlaceholder")}
-                aria-label={t("settings.customInstructions")}
-                onChange={(event) => changeCustomInstructions(event.target.value)}
-              />
-              <div className="personalization-editor-meta">
-                <small>{t("settings.customInstructionsScope")}</small>
-                <span>{customInstructionLength} / {MAX_CUSTOM_INSTRUCTION_LENGTH}</span>
-              </div>
-              <div className="personalization-actions">
-                <button
-                  className="primary-button"
-                  disabled={personalizationBusy || !personalizationChanged}
-                  onClick={() => void savePersonalization()}
-                >
-                  {personalizationBusy && <LoaderCircle className="spin" size={14} />}
-                  {t("common.confirm")}
-                </button>
-              </div>
-            </div>
-          </>}
           {section === "models" && <>
             <h2>{t("settings.modelsTitle")}</h2><p>{t("settings.credentialsDescription")}</p>
-            <div className="provider-list">
-              {props.providers.map((item) => (
-                <button key={item.id} className={selected === item.id ? "selected" : ""} onClick={() => setSelected(item.id)}>
-                  <span className="provider-monogram">{item.name.slice(0, 1)}</span>
-                  <span><strong>{item.name}</strong><small>{item.defaultModel}</small></span>
-                  <i className={item.configured ? "connected" : ""}>{item.configured ? "CLI detected" : t("settings.notConnected")}</i>
-                </button>
-              ))}
-            </div>
-            <div className="credential-panel">
-              <div><strong>{selectedProvider?.name ?? "Devin CLI"}</strong><span>{selectedProvider?.configured ? `Detected ${selectedProvider.version ?? ""}` : t("settings.connectProvider")}</span></div>
-              <p className="credential-note">Devin CLI authentication is managed by the locally installed CLI. This app never reads or stores credential files.</p>
-              <label className="cli-path-field"><span>Devin CLI executable</span><input value={cliPath} placeholder="/absolute/path/to/devin" onChange={(event) => setCliPath(event.target.value)} /></label>
-              <div className="credential-actions">
-                <button disabled={busy} onClick={() => void chooseCliPath()}>Choose executable…</button>
-                <button disabled={busy || !cliPath.trim()} onClick={() => void saveCliPath(cliPath.trim())}>Save & detect</button>
-                <button disabled={busy || !selectedProvider?.configured} onClick={() => void reconnect()}>Reconnect</button>
-                <button className="primary-button" disabled={busy || !selectedProvider?.configured} onClick={() => void connect()}>{busy && <LoaderCircle className="spin" size={14} />}Authenticate</button>
+            <div className="cli-runtime-card">
+              <div className="cli-runtime-header">
+                <span className="cli-runtime-icon"><TerminalSquare size={17} /></span>
+                <span className="cli-runtime-copy">
+                  <strong>{selectedProvider?.name ?? "Devin CLI"}</strong>
+                  <small>{selectedProvider?.configured ? t("settings.cliDetectedVersion", { version: selectedProvider.version ?? "" }) : t("settings.connectProvider")}</small>
+                </span>
+                {!selectedProvider?.configured ? (
+                  <span className="cli-status">{t("settings.notConnected")}</span>
+                ) : (
+                  <span className="cli-update-control" aria-live="polite">
+                    {cliUpdateChecking ? (
+                      <span className="cli-update-checking"><LoaderCircle className="spin" size={13} />{t("settings.cliCheckingUpdate")}</span>
+                    ) : cliUpdateStatus?.state === "available" ? (
+                      <>
+                        <span className="cli-latest-version">{t("settings.cliLatestVersion", { version: cliUpdateStatus.latestVersion ?? "" })}</span>
+                        <button type="button" className="cli-update-button" disabled={runtimeBusy} onClick={() => void updateCli()}>
+                          {cliUpdating ? <LoaderCircle className="spin" size={13} /> : <ArrowUp size={13} />}
+                          {cliUpdating ? t("settings.cliUpdating") : t("settings.cliUpdateNow")}
+                        </button>
+                      </>
+                    ) : cliUpdateStatus?.state === "latest" ? (
+                      <span className="cli-update-latest"><Check size={13} />{t("settings.cliLatest")}</span>
+                    ) : (
+                      <button type="button" className="cli-update-retry" disabled={cliUpdateChecking} title={cliUpdateStatus?.message} onClick={() => void refreshCliUpdateStatus()}>{t("settings.cliRecheckUpdate")}</button>
+                    )}
+                  </span>
+                )}
+              </div>
+              <p className="credential-note">{t("settings.cliAuthenticationNote")}</p>
+              <label className="cli-path-field">
+                <span>{t("settings.cliExecutable")}</span>
+                <span className="settings-input-shell">
+                  <TerminalSquare size={15} aria-hidden="true" />
+                  <input value={cliPath} spellCheck={false} placeholder="/absolute/path/to/devin" onChange={(event) => setCliPath(event.target.value)} />
+                  <button type="button" disabled={runtimeBusy} onClick={() => void chooseCliPath()}><FolderOpen size={14} />{t("settings.chooseExecutable")}</button>
+                </span>
+              </label>
+              <div className="cli-runtime-actions">
+                <button type="button" className="secondary-button" disabled={runtimeBusy || !cliPath.trim() || !cliPathChanged} onClick={() => void saveCliPath(cliPath.trim())}>{t("settings.saveAndDetect")}</button>
+                <button type="button" className="secondary-button" disabled={runtimeBusy || !selectedProvider?.configured} onClick={() => void reconnect()}>{t("settings.reconnect")}</button>
+                <button type="button" className="primary-button" disabled={runtimeBusy || !selectedProvider?.configured} onClick={() => void connect()}>{busy && <LoaderCircle className="spin" size={14} />}{t("settings.authenticate")}</button>
               </div>
             </div>
+            <section className="settings-model-catalog">
+              <div className="settings-model-heading">
+                <span><strong>{t("settings.availableModels")}</strong><small>{t("settings.availableModelsDescription")}</small></span>
+                <label className="settings-model-search">
+                  <Search size={14} aria-hidden="true" />
+                  <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("model.search")} aria-label={t("model.search")} />
+                  <span>{visibleModelCount}</span>
+                </label>
+              </div>
+              <div className="settings-model-list">
+                <div className="settings-model-scroll">
+                  {organizedModels.pinned.length > 0 && <>
+                    <div className="settings-model-section-label">{t("model.pinned")}</div>
+                    {organizedModels.pinned.map((item) => (
+                      <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
+                    ))}
+                  </>}
+                  {organizedModels.others.length > 0 && <>
+                    <div className="settings-model-section-label">{t("model.all")}</div>
+                    {organizedModels.others.map((item) => (
+                      <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned={false} onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
+                    ))}
+                  </>}
+                  {visibleModelCount === 0 && <div className="settings-model-empty">{props.models.length === 0 ? t("settings.modelsUnavailable") : t("model.noResults")}</div>}
+                </div>
+              </div>
+            </section>
           </>}
           {section === "agent" && <>
             <h2>{t("settings.agentTitle")}</h2><p>{t("settings.agentDescription")}</p>
@@ -2223,6 +2247,40 @@ function SettingsDialog(props: {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function SettingsModelRow({
+  model,
+  current,
+  pinned,
+  onTogglePin,
+}: {
+  model: AgentSnapshot["models"][number];
+  current: boolean;
+  pinned: boolean;
+  onTogglePin(): void;
+}) {
+  const { t } = useI18n();
+  const name = model.name ?? model.id;
+  return (
+    <div className={`settings-model-row ${current ? "current" : ""}`}>
+      <span className="settings-model-copy">
+        <strong>{name}</strong>
+        <small>{model.id}</small>
+      </span>
+      {current && <span className="settings-model-current">{t("settings.currentModel")}</span>}
+      <button
+        type="button"
+        className={`settings-model-pin ${pinned ? "pinned" : ""}`}
+        aria-label={t(pinned ? "model.unpin" : "model.pin", { model: name })}
+        aria-pressed={pinned}
+        title={t(pinned ? "model.unpin" : "model.pin", { model: name })}
+        onClick={onTogglePin}
+      >
+        <Pin size={14} fill={pinned ? "currentColor" : "none"} />
+      </button>
     </div>
   );
 }

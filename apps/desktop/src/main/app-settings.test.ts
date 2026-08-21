@@ -53,40 +53,6 @@ describe("AppSettings", () => {
     expect(await settings.getLanguage()).toBe("zh-CN");
   });
 
-  it("defaults personalization and falls back for invalid stored values", async () => {
-    expect(await new AppSettings(file).getPersonalization()).toEqual({ tone: "default", customInstructions: "" });
-
-    await fs.writeFile(file, JSON.stringify({
-      personalization: { tone: "dramatic", customInstructions: "x".repeat(1_501) },
-    }));
-    expect(await new AppSettings(file).getPersonalization()).toEqual({ tone: "default", customInstructions: "" });
-  });
-
-  it("persists every supported tone without replacing other settings", async () => {
-    const settings = new AppSettings(file);
-    await settings.setLanguage("zh-CN");
-    for (const tone of ["default", "professional", "friendly", "candid", "quirky", "efficient", "cynical", "inspiring"] as const) {
-      await settings.setPersonalization({ tone, customInstructions: `Use ${tone}` });
-      expect(await settings.getPersonalization()).toEqual({ tone, customInstructions: `Use ${tone}` });
-    }
-    expect(await settings.getLanguage()).toBe("zh-CN");
-  });
-
-  it("trims, clears, and validates custom instructions by Unicode character", async () => {
-    const settings = new AppSettings(file);
-    const boundary = "😀".repeat(1_500);
-    await settings.setPersonalization({ tone: "friendly", customInstructions: `  ${boundary}  ` });
-    expect(await settings.getPersonalization()).toEqual({ tone: "friendly", customInstructions: boundary });
-
-    await expect(settings.setPersonalization({ tone: "friendly", customInstructions: `${boundary}😀` }))
-      .rejects.toThrow("1500 characters or fewer");
-    await expect(settings.setPersonalization({ tone: "unknown" as "default", customInstructions: "" }))
-      .rejects.toThrow("Unsupported tone preset");
-
-    await settings.setPersonalization({ tone: "default", customInstructions: "   " });
-    expect(await settings.getPersonalization()).toEqual({ tone: "default", customInstructions: "" });
-  });
-
   it("defaults the profile nickname to the system username", async () => {
     expect(await new AppSettings(file, "local-user").getProfile()).toEqual({ nickname: "local-user" });
   });

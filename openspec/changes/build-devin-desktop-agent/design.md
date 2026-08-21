@@ -25,7 +25,7 @@ Devin CLI 是唯一 Agent runtime。Desktop 通过 `devin acp` 的 stdio JSON-RP
 - 不解析 Devin TUI/ANSI 输出，也不通过 PTY 推断消息和工具状态。
 - 不伪造 ACP 未提供的 checkpoint/undo、运行中 steer、任意 system prompt personalization、完整 diff 或精确成本数据。
 - 不默认实现浏览器 E2E、截图验收或真实浏览器自动化；验证优先使用 typecheck、unit test、build、pack 和完整性扫描。
-- 未获得书面再分发授权前，不捆绑、下载或自动替换 Devin CLI 二进制。
+- 未获得书面再分发授权前，不捆绑、重新分发或由 Desktop 自行替换 Devin CLI 二进制；用户显式触发的更新只委托本机 CLI 官方 updater。
 
 ## Decisions
 
@@ -81,7 +81,7 @@ Devin sandbox、permission rules 和企业策略具有最终决定权；UI 只�
 
 工作区、侧栏、composer、Markdown、tool row、file inspector、settings、theme、i18n、command palette 和账户提示使用复制到当前仓库的 DSCode 实现。原 provider picker 收敛为 Devin；模型、模式、图片、命令和会话动作按能力显示。
 
-DSCode personalization 依赖 Core system prompt 注入，而 ACP v1 没有等价 setter，因此首版不注入。运行中 steer 同样没有标准方法，执行期间 composer 只允许排队或显式取消后发送。
+DSCode personalization 依赖 Core system prompt 注入，而 Devin ACP 没有等价 setter，因此 Desktop 不提供对应设置、IPC 或持久化 API；历史本地值不读取、不展示，也不发送给 Devin。运行中 steer 同样没有标准方法，执行期间 composer 只允许排队或显式取消后发送。
 
 ### 10. CLI 扩展和 sandbox 不在 Desktop 重复执行
 
@@ -91,7 +91,7 @@ MCP、Skills、Rules、Hooks、Plugins、Subagents 和 Handoff 继续由 Devin C
 
 发现顺序为用户保存的绝对路径、官方常见安装路径、受控 PATH 查询；候选路径通过 `devin --version` 和 ACP initialize 验证。找不到或版本不兼容时显示诊断和官方安装指引。
 
-应用不读取 credential 文件，不自动安装或更新 CLI。该选择规避未经证实的二进制再分发权、签名、更新和供应链责任。
+应用不读取 credential 文件，也不自动安装 CLI。设置页可从固定的 Devin 官方 release manifest 检查版本；只有用户显式点击更新时，main 才停止 ACP 并调用本机二进制的官方 `devin update`，随后重新执行 `devin --version` 并重建 host。Desktop 不自行下载、校验、解包或覆盖二进制；这样既提供可恢复的升级入口，也不承担第二套 updater 的供应链与原子替换责任。
 
 ### 12. 验证优先采用最窄静态和进程级检查
 

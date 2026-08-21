@@ -75,7 +75,6 @@ export type FeatureId =
   | "subagents"
   | "checkpoint"
   | "steer"
-  | "personalization-system-prompt"
   | "tool-diff"
   | "cost-precision"
   | "audio-input";
@@ -83,7 +82,6 @@ export type FeatureId =
 const UNSUPPORTED_REASONS: Record<Exclude<FeatureId, "handoff-cloud" | "subagents" | "audio-input">, string> = {
   checkpoint: "ACP 未提供原子 checkpoint/undo 能力",
   steer: "ACP v1 没有运行中 steer 方法",
-  "personalization-system-prompt": "ACP 未提供任意 system prompt personalization setter",
   "tool-diff": "ACP 未保证完整工具 diff 数据",
   "cost-precision": "ACP usage 可能不包含可验证的精确 cost/cache 数据",
 };

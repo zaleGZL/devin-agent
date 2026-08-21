@@ -60,8 +60,8 @@
 - [x] 6.3 显示 Devin 返回的 sandbox、permission 和组织策略状态；sandbox 启动失败时 fail-closed，不回退未隔离执行
 - [x] 6.4 将 MCP、Skills、Rules、Hooks、Plugins 和 Subagents 限定为 ACP 命令/工具/事件的只读入口与状态，不创建第二套执行器
 - [x] 6.5 仅在运行时广告时显示 Subagent 与 `/handoff`，并把 Handoff 明确标记为云端执行边界
-- [x] 6.6 隐藏或说明 checkpoint/undo、steer、任意 system prompt personalization、完整 diff、精确 cost/cache 和 audio 等不支持能力
-- [x] 6.7 保留 profile/avatar/theme/language/reasoning 等本地偏好，但禁止把旧 personalization 自动写入 AGENTS、rule 或 system prompt
+- [x] 6.6 隐藏或说明 checkpoint/undo、steer、完整 diff、精确 cost/cache 和 audio 等不支持能力，并删除无效的 system prompt personalization 设置
+- [x] 6.7 保留 profile/avatar/theme/language/reasoning 等有效本地偏好；旧 personalization 不读取、不展示，也不写入 AGENTS、rule 或 system prompt
 - [x] 6.8 为模型/模式动态更新、配置回滚、企业限制、sandbox failure、扩展缺失和 Handoff 门禁增加测试
 
 ## 7. 设置、诊断与错误恢复
@@ -71,6 +71,7 @@
 - [x] 7.3 实现日志与诊断脱敏，覆盖 token、credential-like 值、敏感环境变量、ACP stderr 和测试 fixture
 - [x] 7.4 实现应用退出时的 prompt cancel、pending rejection、listener 清理、SIGTERM 与有界 SIGKILL fallback，验证不遗留 ACP 进程
 - [x] 7.5 更新用户文档，说明 Devin CLI 安装/认证、平台 sandbox 限制、云 Handoff 边界和所有跳过/降级功能
+- [x] 7.6 在设置页查询 Devin 官方最新版本；落后时提供显式更新按钮，调用官方 `devin update` 后重新校验版本并重建 ACP
 
 ## 8. 跨平台构建与分发
 

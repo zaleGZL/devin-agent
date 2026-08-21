@@ -13,7 +13,7 @@
 - 已安装 Devin CLI
 - 已执行 `devin auth login`
 
-应用不会捆绑、下载或更新 Devin CLI，也不需要 DSCode 仓库或任何 `@thinkany/dscode-*` package。其他人只需克隆本仓库、安装依赖，并在本机安装且登录 Devin CLI，即可运行。
+应用不会捆绑或重新分发 Devin CLI，也不需要 DSCode 仓库或任何 `@thinkany/dscode-*` package。其他人只需克隆本仓库、安装依赖，并在本机安装且登录 Devin CLI，即可运行。设置页会从 Devin 官方 release manifest 检查新版本；仅在用户点击“更新”后调用本机 CLI 的官方 `devin update`，完成后重新校验版本并重建 ACP 连接。
 
 ## 本地运行
 
@@ -47,7 +47,7 @@ DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 
 支持范围包括工作区、Devin session、流式对话、reasoning、plan、工具活动、图片输入、动态模型与模式、权限请求、文件预览、主题、语言和命令面板。具体能力由当前 Devin CLI 的 ACP capability 动态决定。
 
-以下功能不会伪造实现：DSCode 原子 checkpoint/undo、运行中 steer、任意 system prompt personalization、完整 tool diff、准确 cost/cache、未被 ACP 广告的 Subagent/Handoff 入口。MCP、Skills、Rules、Hooks、Plugins、Subagents、sandbox 和企业权限仍由 Devin CLI 执行。
+以下功能不会伪造实现：DSCode 原子 checkpoint/undo、运行中 steer、任意 system prompt personalization、完整 tool diff、准确 cost/cache、未被 ACP 广告的 Subagent/Handoff 入口。其中 personalization 不提供无效的本地设置；如需持久指令，请使用 Devin CLI 官方支持的 AGENTS.md 或 Rules。MCP、Skills、Rules、Hooks、Plugins、Subagents、sandbox 和企业权限仍由 Devin CLI 执行。
 
 ## 平台限制
 

@@ -15,6 +15,8 @@ Desktop 进程只连接一个外部 Agent：`devin acp`。Electron main 持有 D
 
 应用不读取或复制 Devin credential 文件。Browser auth 只通过 ACP 广告的方法和系统浏览器完成。
 
+打开“设置 → 模型”时，main 进程从固定的 Devin 官方 release manifest 查询最新稳定版本，并与 `devin --version` 结果进行数值比较。存在新版本时，更新按钮调用本机二进制的官方 `devin update`；Desktop 不自行下载、解包或覆盖二进制。更新前会停止当前 ACP，更新后重新验证版本并重建连接。网络失败、受其他产品管理的安装或更新失败必须显示可重试错误，不得把旧版本标记为已更新。
+
 ## 动态能力
 
 下列 UI 不能使用静态常量，必须来自 ACP initialize/session 响应：
@@ -42,7 +44,7 @@ Desktop 进程只连接一个外部 Agent：`devin acp`。Electron main 持有 D
 
 - 原子 checkpoint/undo：ACP 没有已证实的 snapshot/restore 接口。
 - 运行中 steer：ACP v1 没有标准方法；follow-up 只能排队或先取消。
-- 任意 system prompt personalization：不会静默写入 AGENTS、Rules 或 Devin 配置。
+- 任意 system prompt personalization：Desktop 不提供对应设置或 IPC；历史本地值不读取、不展示，也不会写入 AGENTS、Rules 或 Devin 配置。
 - 完整 tool diff、准确 token/cost/cache：只展示协议实际返回的数据。
 - Audio：能力未广告时隐藏。
 - Knowledge、Playbooks、Secrets、Memories、Workflows、Code Lenses、App Deploys、Conversation Sharing、Arena：Devin Local 文档未提供等价能力。
@@ -59,4 +61,4 @@ Desktop 进程只连接一个外部 Agent：`devin acp`。Electron main 持有 D
 
 支持版本以 `package.json`、lockfile、协议 fixture 和发布说明为准。模型与扩展能力随 CLI 变化，应用只依赖运行时协商结果。
 
-未经书面授权，安装包不包含 Devin CLI binary。跨平台安装包也必须排除 credential、DSCode checkout、DSCode Core 和 `@thinkany/dscode-*` runtime package。
+未经书面授权，安装包不包含 Devin CLI binary。应用内更新只委托已安装 CLI 的官方 updater，跨平台安装包仍必须排除 credential、DSCode checkout、DSCode Core 和 `@thinkany/dscode-*` runtime package。

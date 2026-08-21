@@ -15,6 +15,7 @@ import {
   shell,
 } from "electron";
 import { discoverDevinBinary, validateDevinBinary } from "./devin-discovery";
+import { checkDevinCliUpdate, installDevinCliUpdate, type ManifestFetcher } from "./devin-update";
 import { AppSettings } from "./app-settings";
 import { RecentWorkspaces } from "./recent-workspaces";
 import { listCodexThemes } from "./themes";
@@ -46,8 +47,8 @@ import type {
   AuthUiEvent,
   FilePreview,
   FilePreviewKind,
+  DevinCliUpdateStatus,
   LanguagePreference,
-  PersonalizationSettings,
   ProviderStatus,
   SessionSummary,
   UserProfile,
@@ -76,6 +77,7 @@ let agentHost: RuntimeHost | undefined;
 let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
 let activeAgentCwd: string | undefined;
+let devinCliUpdatePromise: Promise<DevinCliUpdateStatus> | undefined;
 const previewFiles = new Map<string, { filePath: string; rootPath: string }>();
 let activePreviewId: string | undefined;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -364,8 +366,6 @@ function registerIpc(): void {
   ipcMain.handle("settings:set-profile", (_event, profile: unknown) => appSettings.setProfile(expectProfile(profile)));
   ipcMain.handle("settings:get-show-reasoning-process", () => appSettings.getShowReasoningProcess());
   ipcMain.handle("settings:set-show-reasoning-process", (_event, value: unknown) => appSettings.setShowReasoningProcess(expectBoolean(value, "show reasoning")));
-  ipcMain.handle("settings:get-personalization", () => appSettings.getPersonalization());
-  ipcMain.handle("settings:set-personalization", (_event, value: unknown) => appSettings.setPersonalization(expectPersonalization(value)));
   ipcMain.handle("settings:get-pinned-model-ids", () => appSettings.getPinnedModelIds());
   ipcMain.handle("settings:set-pinned-model-ids", (_event, value: unknown) => appSettings.setPinnedModelIds(expectModelIds(value)));
   ipcMain.handle("settings:get-devin-cli-path", () => appSettings.getDevinCliPath());
@@ -390,6 +390,19 @@ function registerIpc(): void {
     await agentHost?.stop?.();
     agentHost = await createRuntimeHost();
     return getDevinProviderStatus();
+  });
+  ipcMain.handle("settings:get-devin-cli-update-status", async () => {
+    const binary = await resolveDevinBinary();
+    return checkDevinCliUpdate(binary.path, { fetchManifest: fetchReleaseManifest });
+  });
+  ipcMain.handle("settings:update-devin-cli", async () => {
+    if (devinCliUpdatePromise) return devinCliUpdatePromise;
+    devinCliUpdatePromise = updateDevinCli();
+    try {
+      return await devinCliUpdatePromise;
+    } finally {
+      devinCliUpdatePromise = undefined;
+    }
   });
 
   ipcMain.handle("workspace:choose", async () => {
@@ -531,10 +544,7 @@ app.on("before-quit", () => {
 
 async function getDevinProviderStatus(): Promise<ProviderStatus> {
   try {
-    const configuredPath = await appSettings.getDevinCliPath();
-    const binary = configuredPath
-      ? { ...(await validateDevinBinary(configuredPath)), source: "configured" as const }
-      : await discoverDevinBinary();
+    const binary = await resolveDevinBinary();
     return {
       id: "devin",
       name: "Devin CLI",
@@ -547,6 +557,29 @@ async function getDevinProviderStatus(): Promise<ProviderStatus> {
     };
   } catch (error) {
     return { id: "devin", name: "Devin CLI", configured: false, source: "external-cli", defaultModel: "", authenticated: false, error: safeError(error) };
+  }
+}
+
+async function resolveDevinBinary() {
+  const configuredPath = await appSettings.getDevinCliPath();
+  return configuredPath
+    ? { ...(await validateDevinBinary(configuredPath)), source: "configured" as const }
+    : discoverDevinBinary();
+}
+
+const fetchReleaseManifest: ManifestFetcher = (url, init) => net.fetch(url, { signal: init.signal });
+
+async function updateDevinCli(): Promise<DevinCliUpdateStatus> {
+  const binary = await resolveDevinBinary();
+  const status = await checkDevinCliUpdate(binary.path, { fetchManifest: fetchReleaseManifest });
+  if (status.state !== "available" || !status.latestVersion) return status;
+
+  await agentHost?.stop?.();
+  agentHost = undefined;
+  try {
+    return await installDevinCliUpdate(binary.path, status.latestVersion);
+  } finally {
+    agentHost = await createRuntimeHost();
   }
 }
 
@@ -639,11 +672,6 @@ function expectLanguage(value: unknown): LanguagePreference {
 function expectProfile(value: unknown): UserProfile {
   const profile = expectRecord(value, "profile");
   return { nickname: expectString(profile.nickname, "nickname", 60), ...(typeof profile.avatarDataUrl === "string" ? { avatarDataUrl: profile.avatarDataUrl } : {}) };
-}
-function expectPersonalization(value: unknown): PersonalizationSettings {
-  const data = expectRecord(value, "personalization");
-  if (typeof data.tone !== "string" || typeof data.customInstructions !== "string") throw new Error("Invalid personalization");
-  return { tone: data.tone as PersonalizationSettings["tone"], customInstructions: data.customInstructions };
 }
 function expectModelIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 32) throw new Error("Invalid pinned model ids");

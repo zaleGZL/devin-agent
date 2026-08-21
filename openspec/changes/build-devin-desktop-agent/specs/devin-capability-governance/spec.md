@@ -47,10 +47,33 @@
 - **THEN** UI 隐藏对应控制或显示明确的不可用原因
 - **THEN** 产品文档与 UI 状态保持一致
 
-### Requirement: Personalization 不得静默注入
-系统 SHALL 保留 profile 等本地显示偏好，但 MUST NOT 把 DSCode personalization 文本静默写成 Devin system prompt、AGENTS 或 rule。
+### Requirement: 不提供无效的 Personalization 控制
+系统 SHALL 保留 profile 等确实影响 Desktop 展示的本地偏好，但 MUST NOT 暴露无法影响 Devin 的回复风格、自定义指令或 system prompt personalization 设置。
 
 #### Scenario: 迁移旧 personalization
 - **WHEN** 本地存在旧 personalization 文本
-- **THEN** 系统最多将其作为未启用的本地数据保留
-- **THEN** 未经用户选择作用域和确认不会影响 Devin 行为
+- **THEN** 系统不读取、不展示，也不通过 ACP、AGENTS、rule 或 system prompt 发送该文本
+- **THEN** 旧值可作为惰性数据保留，以避免升级时擅自销毁用户曾输入的文本
+
+### Requirement: Devin CLI 版本检查与显式更新
+
+系统 SHALL 在用户打开模型设置页时，从固定的 Devin 官方 release manifest 查询最新版本，并 SHALL 使用数值版本比较判断当前 `devin --version` 是否落后。系统 MUST NOT 在没有用户操作时启动更新。
+
+#### Scenario: 当前版本已是最新
+
+- **WHEN** 当前版本大于或等于官方 manifest 的版本
+- **THEN** UI 显示“已是最新版本”
+- **THEN** UI 不显示更新按钮
+
+#### Scenario: 检测到新版本
+
+- **WHEN** 当前版本小于官方 manifest 的版本
+- **THEN** UI 显示最新版本和更新按钮
+- **THEN** 用户点击更新后，main 停止当前 ACP 并调用本机二进制的官方 `devin update`
+- **THEN** 更新完成后系统重新执行 `devin --version`，只有达到目标版本才报告成功并重建 ACP
+
+#### Scenario: 检查或更新失败
+
+- **WHEN** manifest 不可访问、返回无效数据，或官方 updater 未完成更新
+- **THEN** UI 显示可重试错误
+- **THEN** 系统保留原有 CLI 路径，不自行下载或覆盖二进制，也不把旧版本标记为最新

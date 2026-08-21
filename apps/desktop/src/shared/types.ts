@@ -11,23 +11,6 @@ export type PermissionMode = string;
 export type SandboxMode = string;
 export type LanguagePreference = "system" | "zh-CN" | "en";
 
-export const TONE_PRESETS = [
-  "default",
-  "professional",
-  "friendly",
-  "candid",
-  "quirky",
-  "efficient",
-  "cynical",
-  "inspiring",
-] as const;
-export type TonePreset = (typeof TONE_PRESETS)[number];
-
-export interface PersonalizationSettings {
-  tone: TonePreset;
-  customInstructions: string;
-}
-
 export interface UserProfile {
   nickname: string;
   avatarDataUrl?: string;
@@ -69,6 +52,14 @@ export interface ProviderStatus {
   binaryPath?: string;
   authenticated?: boolean | "unknown";
   error?: string;
+}
+
+export interface DevinCliUpdateStatus {
+  currentVersion: string;
+  latestVersion?: string;
+  state: "latest" | "available" | "unavailable";
+  checkedAt: string;
+  message?: string;
 }
 
 export interface ThemePalette {
@@ -200,13 +191,13 @@ export interface DesktopApi {
     setProfile(profile: UserProfile): Promise<void>;
     getShowReasoningProcess(): Promise<boolean>;
     setShowReasoningProcess(value: boolean): Promise<void>;
-    getPersonalization(): Promise<PersonalizationSettings>;
-    setPersonalization(personalization: PersonalizationSettings): Promise<void>;
     getPinnedModelIds(): Promise<string[]>;
     setPinnedModelIds(modelIds: string[]): Promise<void>;
     getDevinCliPath(): Promise<string | null>;
     setDevinCliPath(path: string | null): Promise<ProviderStatus>;
     chooseDevinCliPath(): Promise<ProviderStatus | null>;
+    getDevinCliUpdateStatus(): Promise<DevinCliUpdateStatus>;
+    updateDevinCli(): Promise<DevinCliUpdateStatus>;
   };
   workspace: {
     choose(): Promise<string | null>;

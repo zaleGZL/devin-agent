@@ -34,6 +34,8 @@ pnpm dev
 
 若 Electron GUI 的 PATH 找不到 `devin`，在设置页选择其绝对路径。main 进程会先执行 `devin --version`，再以绝对路径、`args: ["acp"]`、`shell: false` 启动 ACP。
 
+设置页使用固定的 Devin 官方 release manifest 检查最新版本。仅在用户点击更新后，main 才停止 ACP 并调用本机 `devin update`；应用不实现另一套下载器。更新结果以重新执行 `devin --version` 为准，成功后重建 ACP host。
+
 ## 验证证据
 
 本机已执行：
@@ -82,7 +84,7 @@ electron-builder 目标为 macOS arm64/x64 的 DMG/ZIP、Windows x64 的 NSIS、
 
 - checkpoint/undo：ACP v1 没有已证实的 snapshot/restore。
 - 运行中 steer：使用排队或先取消再发送，不伪装协议能力。
-- 任意 system prompt personalization：本地偏好不注入 AGENTS、Rules 或 system prompt。
+- 任意 system prompt personalization：Desktop 不提供对应设置或 IPC；历史本地值不读取、不展示，也不注入 AGENTS、Rules 或 system prompt。
 - 完整 tool diff、精确 cost/cache：只展示协议实际返回的数据。
 - Audio：未广告时隐藏。
 - MCP、Skills、Rules、Hooks、Plugins、Subagents：只展示 ACP 可观测入口和状态，执行权仍在 Devin CLI。
@@ -94,4 +96,4 @@ electron-builder 目标为 macOS arm64/x64 的 DMG/ZIP、Windows x64 的 NSIS、
 1. 取得并配置 macOS 签名/公证及所需发布凭据；Windows 如需代码签名，另行配置证书。
 2. 在 Windows x64 与 Linux x64 的发布 CI 中完成一次真实外部 Devin CLI 冒烟，而非只依赖 mock 和 packaged 启动测试。
 3. 发布名称、图标和商店文案不得暗示 Cognition/Devin 官方背书；当前使用自有中性图标，仍需发布方完成商标法务确认。
-4. 不得重新分发 Devin CLI binary；DSCode 移植部分继续保留 MIT notice、来源 commit 与复制清单。
+4. 不得重新分发 Devin CLI binary；应用内更新必须继续委托官方 `devin update`，不得改为自行覆盖可执行文件。DSCode 移植部分继续保留 MIT notice、来源 commit 与复制清单。
