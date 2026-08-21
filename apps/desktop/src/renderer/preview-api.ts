@@ -1,7 +1,7 @@
 import type { DesktopApi } from "../shared/types";
 
 const workspace = "/Users/demo/projects/devin-agent";
-const themesWorkspace = "/Users/demo/projects/codexthemes-skills";
+const docsWorkspace = "/Users/demo/projects/developer-docs";
 const terminalWorkspace = "/Users/demo/projects/termany";
 const generalTasksWorkspace = "/Users/demo/Library/Application Support/Devin Agent/tasks";
 const previewNow = new Date().toISOString();
@@ -32,12 +32,9 @@ export function createPreviewApi(): DesktopApi {
       homeDirectory: async () => "/Users/demo",
       openExternal: async () => undefined,
     },
-    themes: {
-      list: async () => [],
-      getActive: async () => null,
-      setActive: async () => undefined,
-    },
     settings: {
+      getColorScheme: async () => "system",
+      setColorScheme: async () => undefined,
       getLanguage: async () => "system",
       setLanguage: async () => undefined,
       getProfile: async () => ({ nickname: "demo" }),
@@ -56,7 +53,7 @@ export function createPreviewApi(): DesktopApi {
       choose: async () => workspace,
       recent: async () => [
         { path: workspace, name: "devin-agent", lastOpenedAt: new Date().toISOString() },
-        { path: themesWorkspace, name: "codexthemes-skills", lastOpenedAt: new Date(Date.now() - 3_600_000).toISOString() },
+        { path: docsWorkspace, name: "developer-docs", lastOpenedAt: new Date(Date.now() - 3_600_000).toISOString() },
         { path: terminalWorkspace, name: "termany", lastOpenedAt: new Date(Date.now() - 7_200_000).toISOString() },
       ],
       forget: async () => [],
@@ -95,8 +92,8 @@ export function createPreviewApi(): DesktopApi {
         previewSession("6", "Fix authentication settings", 21_600_000, 6),
         previewSession("7", "Polish the composer layout", 32_400_000, 5),
         previewSession("8", "Prepare the desktop release", 43_200_000, 8),
-        previewSession("9", "Design a native Codex theme", 14_400_000, 5, themesWorkspace),
-        previewSession("10", "Package theme assets", 28_800_000, 4, themesWorkspace),
+        previewSession("9", "Document the desktop architecture", 14_400_000, 5, docsWorkspace),
+        previewSession("10", "Publish developer documentation", 28_800_000, 4, docsWorkspace),
         previewSession("11", "Improve terminal session restore", 18_000_000, 6, terminalWorkspace),
         previewSession("2", "Compare two implementation options", 7_200_000, 9, generalTasksWorkspace),
         previewSession("3", "Plan the next release", 86_400_000, 6, generalTasksWorkspace),

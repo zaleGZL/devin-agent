@@ -18,6 +18,8 @@ const initializeResult = {
 class FakeTransport {
   isRunning = false;
   emitHistoryDuringLoad = false;
+  deferPrompts = false;
+  private readonly promptResolvers: Array<(value: JsonObject) => void> = [];
   requests: Array<{ method: string; params: unknown }> = [];
   notifications: Array<{ method: string; params: unknown }> = [];
 
@@ -41,7 +43,10 @@ class FakeTransport {
       } as T;
     }
     if (method === "session/list") return { sessions: [{ sessionId: "listed", cwd: "/workspace", _meta: { "cognition.ai/isLocked": true } }] } as T;
-    if (method === "session/prompt") return { stopReason: "end_turn" } as T;
+    if (method === "session/prompt") {
+      if (this.deferPrompts) return new Promise<JsonObject>((resolve) => this.promptResolvers.push(resolve)) as Promise<T>;
+      return { stopReason: "end_turn" } as T;
+    }
     return {} as T;
   }
 
@@ -55,6 +60,7 @@ class FakeTransport {
   emitUpdate(params: JsonObject): void { this.options.onNotification?.("session/update", params); }
   emitExit(): void { this.isRunning = false; this.options.onExit?.({ code: 1, signal: null, stderr: "token=[REDACTED]" }); }
   requestPermission(params: JsonObject): Promise<unknown> { return Promise.resolve(this.options.onRequest?.("session/request_permission", params)); }
+  resolvePrompt(): void { this.promptResolvers.shift()?.({ stopReason: "end_turn" }); }
 }
 
 function createHost(overrides: Partial<ConstructorParameters<typeof DevinAcpHost>[0]> = {}) {
@@ -123,7 +129,7 @@ describe("DevinAcpHost contract", () => {
     await host.stop();
   });
 
-  it("lists/deletes advertised sessions and restarts the host when close is absent", async () => {
+  it("lists/deletes advertised sessions and switches without interrupting sibling sessions", async () => {
     const { host, transports } = createHost();
     await host.start();
     await host.newSession("/workspace");
@@ -133,9 +139,29 @@ describe("DevinAcpHost contract", () => {
     expect(transports[0]?.requests.some((request) => request.method === "session/delete")).toBe(true);
 
     await host.switchSession("saved-session", { cwd: "/workspace" });
-    expect(transports).toHaveLength(2);
-    expect(transports[0]?.notifications).toContainEqual({ method: "session/cancel", params: { sessionId: "new-session" } });
-    expect(transports[1]?.requests.some((request) => request.method === "session/load")).toBe(true);
+    expect(transports).toHaveLength(1);
+    expect(transports[0]?.notifications).not.toContainEqual({ method: "session/cancel", params: { sessionId: "new-session" } });
+    expect(transports[0]?.requests.some((request) => request.method === "session/load")).toBe(true);
+    await host.stop();
+  });
+
+  it("keeps a prompt running when another session becomes active", async () => {
+    const { host, transports } = createHost();
+    await host.start();
+    await host.newSession("/workspace");
+    transports[0]!.deferPrompts = true;
+
+    const prompt = host.prompt("keep working", "new-session");
+    await Promise.resolve();
+    expect(host.runningSessionIds).toContain("new-session");
+    await host.switchSession("saved-session", { cwd: "/workspace" });
+
+    expect(host.sessionId).toBe("saved-session");
+    expect(host.runningSessionIds).toContain("new-session");
+    expect(transports[0]?.notifications).not.toContainEqual({ method: "session/cancel", params: { sessionId: "new-session" } });
+    transports[0]!.resolvePrompt();
+    await prompt;
+    expect(host.runningSessionIds).not.toContain("new-session");
     await host.stop();
   });
 

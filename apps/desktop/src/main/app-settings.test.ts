@@ -23,16 +23,33 @@ describe("AppSettings", () => {
 
   it("persists language without replacing other settings", async () => {
     const settings = new AppSettings(file);
-    await settings.setThemeId("paper");
+    await settings.setColorScheme("dark");
     await settings.setLanguage("zh-CN");
 
     expect(await settings.getLanguage()).toBe("zh-CN");
-    expect(await settings.getThemeId()).toBe("paper");
+    expect(await settings.getColorScheme()).toBe("dark");
   });
 
   it("falls back to system for an unknown stored value", async () => {
     await fs.writeFile(file, JSON.stringify({ language: "fr" }));
     expect(await new AppSettings(file).getLanguage()).toBe("system");
+  });
+
+  it("defaults to the system color scheme and persists an explicit override", async () => {
+    const settings = new AppSettings(file);
+    expect(await settings.getColorScheme()).toBe("system");
+
+    await settings.setColorScheme("light");
+    expect(await settings.getColorScheme()).toBe("light");
+  });
+
+  it("ignores invalid color schemes and replaces them on save", async () => {
+    await fs.writeFile(file, JSON.stringify({ colorScheme: "sepia" }));
+    const settings = new AppSettings(file);
+    expect(await settings.getColorScheme()).toBe("system");
+
+    await settings.setColorScheme("dark");
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({ colorScheme: "dark" });
   });
 
   it("hides the reasoning process by default and for invalid stored values", async () => {
@@ -44,12 +61,12 @@ describe("AppSettings", () => {
 
   it("persists the reasoning process preference without replacing other settings", async () => {
     const settings = new AppSettings(file);
-    await settings.setThemeId("paper");
+    await settings.setColorScheme("dark");
     await settings.setLanguage("zh-CN");
     await settings.setShowReasoningProcess(true);
 
     expect(await settings.getShowReasoningProcess()).toBe(true);
-    expect(await settings.getThemeId()).toBe("paper");
+    expect(await settings.getColorScheme()).toBe("dark");
     expect(await settings.getLanguage()).toBe("zh-CN");
   });
 

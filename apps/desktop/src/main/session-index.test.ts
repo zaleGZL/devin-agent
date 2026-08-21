@@ -2,7 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readSessionSummary } from "./session-index";
+import {
+  archiveSession,
+  configureSessionIndex,
+  listSessions,
+  readSessionSummary,
+  unarchiveSession,
+  upsertSessionSummary,
+} from "./session-index";
 
 const temporaryDirectories: string[] = [];
 
@@ -29,5 +36,18 @@ describe("session index", () => {
       title: "Implement a polished desktop client",
       messageCount: 2,
     });
+  });
+
+  it("keeps archive state as a reversible local overlay", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devin-agent-session-index-"));
+    temporaryDirectories.push(directory);
+    configureSessionIndex(path.join(directory, "sessions.json"));
+    const now = new Date().toISOString();
+    await upsertSessionSummary({ id: "session-1", path: "session-1", cwd: "/tmp/project", title: "Background task", createdAt: now, updatedAt: now });
+
+    await expect(archiveSession("session-1")).resolves.toMatchObject({ archived: true });
+    await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: true })]);
+    await expect(unarchiveSession("session-1")).resolves.toMatchObject({ archived: false });
+    await expect(listSessions()).resolves.toEqual([expect.objectContaining({ id: "session-1", archived: false })]);
   });
 });

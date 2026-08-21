@@ -9,6 +9,7 @@ export const AUTH_PROMPT_CANCEL_VALUE = "__devin_auth_prompt_cancel__";
 /** Devin CLI mode identifiers are runtime advertised; unknown values remain valid. */
 export type PermissionMode = string;
 export type SandboxMode = string;
+export type ColorSchemePreference = "system" | "light" | "dark";
 export type LanguagePreference = "system" | "zh-CN" | "en";
 
 export interface UserProfile {
@@ -60,31 +61,6 @@ export interface DevinCliUpdateStatus {
   state: "latest" | "available" | "unavailable";
   checkedAt: string;
   message?: string;
-}
-
-export interface ThemePalette {
-  canvas: string;
-  surface: string;
-  raised: string;
-  text: string;
-  muted: string;
-  accent: string;
-  border: string;
-  focus: string;
-  success: string;
-  warning: string;
-  danger: string;
-  terminalBackground?: string;
-  terminalForeground?: string;
-}
-
-export interface ThemeSummary {
-  id: string;
-  displayName: string;
-  description?: string;
-  previewDataUrl?: string;
-  mode: "light" | "dark";
-  palette: ThemePalette;
 }
 
 export type FilePreviewKind = "html" | "markdown" | "image" | "pdf" | "video" | "audio" | "code" | "text" | "unsupported";
@@ -179,12 +155,9 @@ export interface DesktopApi {
     homeDirectory(): Promise<string>;
     openExternal(url: string): Promise<void>;
   };
-  themes: {
-    list(): Promise<ThemeSummary[]>;
-    getActive(): Promise<string | null>;
-    setActive(id: string | null): Promise<void>;
-  };
   settings: {
+    getColorScheme(): Promise<ColorSchemePreference>;
+    setColorScheme(preference: ColorSchemePreference): Promise<void>;
     getLanguage(): Promise<LanguagePreference>;
     setLanguage(language: LanguagePreference): Promise<void>;
     getProfile(): Promise<UserProfile>;

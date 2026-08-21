@@ -6,7 +6,6 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
-  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -14,6 +13,8 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowUp,
   Bot,
   Box,
@@ -42,6 +43,8 @@ import {
   LoaderCircle,
   MessageSquareWarning,
   MessageSquareText,
+  Monitor,
+  Moon,
   Paperclip,
   PanelLeft,
   PanelRight,
@@ -55,12 +58,14 @@ import {
   Sun,
   TerminalSquare,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import type {
   AgentSnapshot,
   AgentSessionStats,
   AuthUiEvent,
+  ColorSchemePreference,
   DevinCliUpdateStatus,
   ExtensionUiRequest,
   LanguagePreference,
@@ -70,7 +75,6 @@ import type {
   FilePreview,
   SandboxMode,
   SessionSummary,
-  ThemeSummary,
   UserProfile,
   WorkspaceItem,
 } from "../shared/types";
@@ -88,7 +92,7 @@ import {
   type ToolActivity,
   type TurnWorkEntry,
 } from "./lib/conversation";
-import { applyTheme } from "./lib/theme";
+import { applyColorScheme } from "./lib/color-scheme";
 import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
@@ -139,12 +143,11 @@ export default function App() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const [fullyExpandedProjects, setFullyExpandedProjects] = useState<Set<string>>(() => new Set());
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [activeSession, setActiveSession] = useState<string>();
+  const [activeSession, setActiveSessionState] = useState<string>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [provider, setProvider] = useState<ProviderId>("devin");
-  const [themes, setThemes] = useState<ThemeSummary[]>([]);
-  const [themeId, setThemeId] = useState<string | null>(null);
+  const [colorScheme, setColorScheme] = useState<ColorSchemePreference>("system");
   const [profile, setProfile] = useState<UserProfile>({ nickname: "User" });
   const [showReasoningProcess, setShowReasoningProcess] = useState(false);
   const [model, setModel] = useState("");
@@ -161,7 +164,7 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
-  const [running, setRunning] = useState(false);
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -179,6 +182,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionQuery, setSessionQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
+  const [archiveNotice, setArchiveNotice] = useState<SessionSummary>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
@@ -192,9 +196,44 @@ export default function App() {
   const workspaceRef = useRef<string | undefined>(undefined);
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
+  const activeSessionRef = useRef<string | undefined>(undefined);
+  const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
+  const runningSessionIdsRef = useRef(new Set<string>());
+  const running = activeSession ? runningSessionIds.has(activeSession) : false;
+
+  const selectActiveSession = useCallback((sessionId?: string) => {
+    activeSessionRef.current = sessionId;
+    setActiveSessionState(sessionId);
+  }, []);
+
+  const markSessionRunning = useCallback((sessionId: string | undefined, value: boolean) => {
+    if (!sessionId) return;
+    const next = new Set(runningSessionIdsRef.current);
+    if (value) next.add(sessionId);
+    else next.delete(sessionId);
+    runningSessionIdsRef.current = next;
+    setRunningSessionIds(next);
+  }, []);
+
+  const updateSessionMessages = useCallback((sessionId: string, update: (messages: ChatMessage[]) => ChatMessage[]) => {
+    if (sessionId === activeSessionRef.current) {
+      setMessages((current) => {
+        const next = update(current);
+        sessionMessagesRef.current.set(sessionId, next);
+        return next;
+      });
+      return;
+    }
+    const current = sessionMessagesRef.current.get(sessionId) ?? [];
+    sessionMessagesRef.current.set(sessionId, update(current));
+  }, []);
 
   const hydrateSnapshot = useCallback((snapshot: AgentSnapshot) => {
-    if (snapshot.messages.length > 0) setMessages(normalizeMessages(snapshot.messages));
+    if (snapshot.messages.length > 0) {
+      const normalized = normalizeMessages(snapshot.messages);
+      if (snapshot.sessionId) sessionMessagesRef.current.set(snapshot.sessionId, normalized);
+      if (!snapshot.sessionId || snapshot.sessionId === activeSessionRef.current) setMessages(normalized);
+    }
     setAvailableModels(snapshot.models);
     setAvailableModes(snapshot.modes ?? []);
     setCapabilities(snapshot.capabilities);
@@ -209,10 +248,12 @@ export default function App() {
   const refreshSessions = useCallback(async () => {
     const items = await window.devinAgent.sessions.list();
     setSessions(items);
-    setActiveSession((current) => {
-      if (current || !items[0]) return current;
-      activeCwdRef.current = items[0].cwd;
-      return items[0].path;
+    setActiveSessionState((current) => {
+      const firstVisible = items.find((session) => !session.archived);
+      if (current || !firstVisible) return current;
+      activeCwdRef.current = firstVisible.cwd;
+      activeSessionRef.current = firstVisible.path;
+      return firstVisible.path;
     });
   }, []);
 
@@ -279,8 +320,7 @@ export default function App() {
     const nextProvider = overrides?.provider ?? provider;
     const providerStatuses = behavior?.providerStatuses ?? providers;
     const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
-    setUiRequest(undefined);
-    setActiveSession(sessionPath);
+    selectActiveSession(sessionPath);
     activeCwdRef.current = cwd;
     workspaceRef.current = projectPath;
     setWorkspace(projectPath);
@@ -308,8 +348,11 @@ export default function App() {
         sandbox: overrides?.sandbox ?? sandbox,
         ...(sessionPath ? { sessionPath } : {}),
       });
+      const nextSessionId = snapshot.sessionId ?? sessionPath;
+      selectActiveSession(nextSessionId);
       hydrateSnapshot(snapshot);
-      setRunning(Boolean(snapshot.state.isStreaming));
+      markSessionRunning(nextSessionId, Boolean(snapshot.state.isStreaming));
+      await refreshSessions();
       return true;
     } catch (error) {
       if (isAgentSessionClosedError(error)) return false;
@@ -321,17 +364,16 @@ export default function App() {
     } finally {
       if (!background) setLoading(false);
     }
-  }, [hydrateSnapshot, permission, provider, providers, sandbox, t]);
+  }, [hydrateSnapshot, markSessionRunning, permission, provider, providers, refreshSessions, sandbox, selectActiveSession, t]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, homeDirectory] = await Promise.all([
+      const [recentItems, allSessions, providerItems, storedColorScheme, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, homeDirectory] = await Promise.all([
         window.devinAgent.workspace.recent(),
         window.devinAgent.sessions.list(),
         window.devinAgent.auth.status(),
-        window.devinAgent.themes.list(),
-        window.devinAgent.themes.getActive(),
+        window.devinAgent.settings.getColorScheme(),
         window.devinAgent.settings.getProfile(),
         window.devinAgent.settings.getShowReasoningProcess(),
         window.devinAgent.settings.getPinnedModelIds(),
@@ -341,19 +383,18 @@ export default function App() {
       setWorkspaces(recentItems);
       setSessions(allSessions);
       setProviders(providerItems);
-      setThemes(themeItems);
-      setThemeId(activeThemeId);
+      setColorScheme(storedColorScheme);
       setProfile(storedProfile);
       setShowReasoningProcess(storedShowReasoningProcess);
       setPinnedModelIds(storedPinnedModelIds);
-      applyTheme(themeItems.find((item) => item.id === activeThemeId) ?? null);
+      applyColorScheme(storedColorScheme);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
         ?? providerItems.find((item) => item.configured);
       if (configured) {
         setProvider(configured.id);
         if (configured.defaultModel) setModel(configured.defaultModel);
       }
-      const selectedSession = allSessions[0];
+      const selectedSession = allSessions.find((session) => !session.archived);
       const selectedProject = selectedSession
         ? recentItems.find((item) => item.path === selectedSession.cwd)
         : undefined;
@@ -362,7 +403,7 @@ export default function App() {
       workspaceRef.current = selectedProject?.path;
       setWorkspace(selectedProject?.path);
       if (selectedProject) setExpandedProjects(new Set([selectedProject.path]));
-      setActiveSession(selectedSession?.path);
+      selectActiveSession(selectedSession?.path);
       setSessionLocked(selectedSession?.locked === true);
       if (configured && selectedSession && selectedSession.locked !== true) {
         try {
@@ -387,17 +428,18 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [hydrateSnapshot]);
+  }, [hydrateSnapshot, selectActiveSession]);
 
   useEffect(() => {
     const offEvent = window.devinAgent.agent.onEvent((event) => {
-      if (event.type === "agent_start") setRunning(true);
+      const eventSessionId = typeof event.sessionId === "string" ? event.sessionId : undefined;
+      if (event.type === "agent_start") markSessionRunning(eventSessionId, true);
       if (event.type === "agent_settled") {
-        setRunning(false);
-        setMessages((current) => settleAssistantMessages(current));
-        setUiRequest(undefined);
+        markSessionRunning(eventSessionId, false);
+        if (eventSessionId) updateSessionMessages(eventSessionId, settleAssistantMessages);
+        if (!eventSessionId || eventSessionId === activeSessionRef.current) setUiRequest(undefined);
         void refreshSessions();
-        void refreshSessionStats();
+        if (!eventSessionId || eventSessionId === activeSessionRef.current) void refreshSessionStats();
         return;
       }
       if (event.type === "extension_ui_request") {
@@ -432,7 +474,8 @@ export default function App() {
       if (event.type === "agent_start") return;
       if (event.type === "agent_state") {
         if (event.state === "error" || event.state === "auth-required") {
-          setRunning(false);
+          runningSessionIdsRef.current = new Set();
+          setRunningSessionIds(new Set());
           setToast({
             message: typeof event.error === "string"
               ? cleanError(event.error)
@@ -450,9 +493,11 @@ export default function App() {
       }
       if (event.type !== "acp_update") return;
       const normalized = normalizeAcpUpdate(event, typeof event.sessionId === "string" ? event.sessionId : "unknown-session");
-      if (normalized.type === "commands") setAvailableCommands(normalized.commands);
-      if (normalized.type === "mode") setPermission(normalized.modeId);
-      if (normalized.type === "config" || normalized.type === "config_options") {
+      const normalizedSessionId = normalized.sessionId || eventSessionId;
+      const isActiveUpdate = !normalizedSessionId || normalizedSessionId === activeSessionRef.current;
+      if (normalized.type === "commands" && isActiveUpdate) setAvailableCommands(normalized.commands);
+      if (normalized.type === "mode" && isActiveUpdate) setPermission(normalized.modeId);
+      if ((normalized.type === "config" || normalized.type === "config_options") && isActiveUpdate) {
         const updatedOptions = normalized.type === "config_options" ? normalized.options : [normalized.option];
         const modelOption = updatedOptions.find((option) => option.id === "model" || option.category === "model");
         const modeOption = updatedOptions.find((option) => option.id === "mode" || option.category === "mode");
@@ -474,9 +519,9 @@ export default function App() {
         }
         if (modeOption && typeof modeOption.currentValue === "string") setPermission(modeOption.currentValue);
       }
-      if (normalized.type === "plan") setAgentPlan(normalized.plan);
+      if (normalized.type === "plan" && isActiveUpdate) setAgentPlan(normalized.plan);
       if (normalized.type === "session_info") {
-        if (typeof normalized.locked === "boolean") setSessionLocked(normalized.locked);
+        if (isActiveUpdate && typeof normalized.locked === "boolean") setSessionLocked(normalized.locked);
         setSessions((current) => current.map((session) => session.id === normalized.sessionId ? {
           ...session,
           ...(normalized.title ? { title: normalized.title } : {}),
@@ -486,13 +531,14 @@ export default function App() {
         } : session));
       }
       if (normalized.type === "unknown") console.warn("Unknown Devin ACP update", normalized.kind, normalized.diagnostic);
-      if (["message_chunk", "thought_chunk", "tool_start", "tool_update", "tool_end"].includes(normalized.type)) {
-        setMessages((current) => applyAgentEvent(current, normalized));
+      if (normalizedSessionId && ["message_chunk", "thought_chunk", "tool_start", "tool_update", "tool_end"].includes(normalized.type)) {
+        updateSessionMessages(normalizedSessionId, (current) => applyAgentEvent(current, normalized));
       }
     });
     const offError = window.devinAgent.agent.onError((message) => {
       if (isAgentSessionClosedError(message)) return;
-      setRunning(false);
+      runningSessionIdsRef.current = new Set();
+      setRunningSessionIds(new Set());
       setUiRequest(undefined);
       setToast({ message: cleanError(message), type: "error" });
     });
@@ -515,7 +561,7 @@ export default function App() {
       offAuth();
       offCommand?.();
     };
-  }, [refreshSessionStats, refreshSessions, t]);
+  }, [markSessionRunning, refreshSessionStats, refreshSessions, t, updateSessionMessages]);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -544,6 +590,22 @@ export default function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [messages, running, uiRequest]);
 
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const content = scroller?.querySelector(".messages");
+    if (!scroller || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!followingConversationTailRef.current) return;
+      window.requestAnimationFrame(() => {
+        if (!followingConversationTailRef.current) return;
+        scroller.scrollTop = scroller.scrollHeight;
+        previousConversationScrollTopRef.current = scroller.scrollTop;
+      });
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [activeSession]);
+
   const handleConversationScroll = useCallback(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
@@ -570,6 +632,12 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!archiveNotice) return;
+    const timer = window.setTimeout(() => setArchiveNotice(undefined), 5200);
+    return () => window.clearTimeout(timer);
+  }, [archiveNotice]);
+
   useEffect(() => () => inspectorResizeCleanupRef.current(), []);
 
   useEffect(() => {
@@ -590,7 +658,7 @@ export default function App() {
     if (!selected) return undefined;
     setWorkspaces(await window.devinAgent.workspace.recent());
     setMessages([]);
-    setActiveSession(undefined);
+    selectActiveSession(undefined);
     setExpandedProjects((current) => new Set(current).add(selected));
     await startAgent(selected, undefined, undefined, selected);
     textareaRef.current?.focus();
@@ -603,7 +671,7 @@ export default function App() {
     homeDirectoryRef.current = homeDirectory;
     const cwd = resolveNewTaskCwd(projectPath, homeDirectory);
     setMessages([]);
-    setActiveSession(undefined);
+    selectActiveSession(undefined);
     setAgentPlan(undefined);
     await startAgent(cwd, undefined, undefined, projectPath);
     textareaRef.current?.focus();
@@ -614,7 +682,7 @@ export default function App() {
     const cwd = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
     homeDirectoryRef.current = cwd;
     setMessages([]);
-    setActiveSession(undefined);
+    selectActiveSession(undefined);
     setAgentPlan(undefined);
     await startAgent(cwd, undefined, undefined, undefined);
     textareaRef.current?.focus();
@@ -632,17 +700,39 @@ export default function App() {
   const openSession = async (session: SessionSummary) => {
     if (session.path === activeSession || loading) return;
     const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
-    setMessages([]);
+    selectActiveSession(session.path);
+    setMessages(sessionMessagesRef.current.get(session.path) ?? []);
     setAgentPlan(undefined);
     setSessionLocked(session.locked === true);
     if (session.locked === true) {
-      setActiveSession(session.path);
       activeCwdRef.current = session.cwd;
       workspaceRef.current = projectPath;
       setWorkspace(projectPath);
       return;
     }
     await startAgent(session.cwd, session.path, undefined, projectPath);
+  };
+
+  const archiveSession = async (session: SessionSummary) => {
+    try {
+      const archived = await window.devinAgent.sessions.archive?.(session.id);
+      if (!archived) throw new Error(t("archive.failed"));
+      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...archived, archived: true } : item));
+      setArchiveNotice({ ...session, ...archived, archived: true });
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  };
+
+  const restoreSession = async (session: SessionSummary) => {
+    try {
+      const restored = await window.devinAgent.sessions.unarchive?.(session.id);
+      if (!restored) throw new Error(t("archive.restoreFailed"));
+      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...restored, archived: false } : item));
+      setArchiveNotice((current) => current?.id === session.id ? undefined : current);
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
   };
 
   const sendMessage = async () => {
@@ -654,46 +744,59 @@ export default function App() {
       return;
     }
     const alreadyRunning = running;
+    const targetSessionId = activeSessionRef.current;
+    if (!targetSessionId) return;
+    followingConversationTailRef.current = true;
     setDraft("");
     const queued = alreadyRunning;
     const messageImages = attachments.map(({ data, mimeType }) => ({ data, mimeType }));
-    setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
+    updateSessionMessages(targetSessionId, (current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
+    const sentAt = new Date().toISOString();
+    setSessions((current) => current.map((session) => session.path === targetSessionId ? {
+      ...session,
+      title: session.messageCount ? session.title : crop(text || t("composer.attachedImage"), 80),
+      updatedAt: sentAt,
+      messageCount: (session.messageCount ?? 0) + 1,
+    } : session));
     const images = messageImages.map((image) => ({ type: "image", ...image }));
     setAttachments([]);
-    setRunning(true);
+    markSessionRunning(targetSessionId, true);
     try {
       if (alreadyRunning) setToast({ message: "The active Devin prompt will be cancelled before these instructions are sent.", type: "info" });
       await window.devinAgent.agent.command(alreadyRunning ? "follow_up" : "prompt", {
         message: text || t("composer.describeImage"),
         ...(images.length ? { images } : {}),
       });
-      setRunning(false);
+      markSessionRunning(targetSessionId, false);
     } catch (error) {
       if (isAgentSessionClosedError(error)) {
-        setRunning(false);
+        markSessionRunning(targetSessionId, false);
         return;
       }
-      setRunning(alreadyRunning);
+      markSessionRunning(targetSessionId, alreadyRunning);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
 
   const stopAgent = async () => {
     await window.devinAgent.agent.command("abort").catch(() => undefined);
-    setRunning(false);
+    markSessionRunning(activeSessionRef.current, false);
   };
 
   const runAvailableCommand = async (command: AvailableCommand) => {
     const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
     if (/^\/handoff\b/i.test(name) && !window.confirm("Handoff moves this task to a cloud Devin session. Continue?")) return;
     const alreadyRunning = running;
-    setMessages((current) => [...current, optimisticUserMessage(name, alreadyRunning)]);
-    setRunning(true);
+    const targetSessionId = activeSessionRef.current;
+    if (!targetSessionId) return;
+    followingConversationTailRef.current = true;
+    updateSessionMessages(targetSessionId, (current) => [...current, optimisticUserMessage(name, alreadyRunning)]);
+    markSessionRunning(targetSessionId, true);
     try {
       await window.devinAgent.agent.command(alreadyRunning ? "follow_up" : "prompt", { message: name });
-      setRunning(false);
+      markSessionRunning(targetSessionId, false);
     } catch (error) {
-      setRunning(false);
+      markSessionRunning(targetSessionId, false);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
@@ -777,18 +880,17 @@ export default function App() {
     }
   };
 
-  const changeTheme = async (id: string | null) => {
-    setThemeId(id);
-    applyTheme(themes.find((item) => item.id === id) ?? null);
+  const changeColorScheme = async (next: ColorSchemePreference) => {
+    const previous = colorScheme;
+    setColorScheme(next);
+    applyColorScheme(next);
     try {
-      await window.devinAgent.themes.setActive(id);
+      await window.devinAgent.settings.setColorScheme(next);
     } catch (error) {
+      setColorScheme(previous);
+      applyColorScheme(previous);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
-  };
-
-  const refreshThemes = async () => {
-    setThemes(await window.devinAgent.themes.list());
   };
 
   const allTools = useMemo(() => messages.flatMap((message) => message.tools), [messages]);
@@ -902,7 +1004,7 @@ export default function App() {
   const projectSessions = useMemo(() => {
     const grouped = new Map<string, SessionSummary[]>();
     for (const item of workspaces) grouped.set(item.path, []);
-    for (const session of sessions) grouped.get(session.cwd)?.push(session);
+    for (const session of sessions) if (!session.archived) grouped.get(session.cwd)?.push(session);
     return grouped;
   }, [sessions, workspaces]);
   const filteredWorkspaces = useMemo(() => {
@@ -915,7 +1017,7 @@ export default function App() {
   }, [projectSessions, sessionQuery, workspaces]);
   const recentTasks = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
-    const tasks = sessions.filter((session) => !projectPaths.has(session.cwd));
+    const tasks = sessions.filter((session) => !session.archived && !projectPaths.has(session.cwd));
     return query ? tasks.filter((session) => session.title.toLowerCase().includes(query)) : tasks;
   }, [projectPaths, sessionQuery, sessions]);
   const activeTitle = sessions.find((session) => session.path === activeSession)?.title ?? (messages[0]?.text || t("status.newThread"));
@@ -983,15 +1085,19 @@ export default function App() {
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
                       {visibleTasks.map((session) => (
-                        <button
-                          key={session.path}
-                          className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
-                          onClick={() => void openSession(session)}
-                          title={session.title}
-                          aria-current={session.path === activeSession ? "page" : undefined}
-                        >
-                          <span>{session.title}</span>
-                        </button>
+                        <div key={session.path} className={`project-task-item ${session.path === activeSession ? "active" : ""}`}>
+                          <button
+                            className="project-task-row"
+                            onClick={() => void openSession(session)}
+                            title={session.title}
+                            aria-current={session.path === activeSession ? "page" : undefined}
+                          >
+                            <span>{session.title}</span>
+                          </button>
+                          {runningSessionIds.has(session.path)
+                            ? <LoaderCircle className="spin session-running" size={12} aria-label={t("status.running")} />
+                            : <button className="session-archive-action" onClick={() => void archiveSession(session)} aria-label={t("archive.action", { title: session.title })} title={t("archive.action", { title: session.title })}><Archive size={12} /></button>}
+                        </div>
                       ))}
                       {!query && taskSource.length > PROJECT_TASK_PREVIEW_COUNT && (
                         <button
@@ -1020,14 +1126,14 @@ export default function App() {
           {recentSectionOpen && <>
             {recentTasks.length === 0 && <div className="sidebar-empty">{t("sidebar.noRecentTasks")}</div>}
             {recentTasks.map((session) => (
-              <button
-                key={session.path}
-                className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
-                onClick={() => void openSession(session)}
-              >
-                <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
-                <span className="task-dot" aria-hidden="true" />
-              </button>
+              <div key={session.path} className={`recent-task-item ${session.path === activeSession ? "active" : ""}`}>
+                <button className="thread-row recent-task-row" onClick={() => void openSession(session)}>
+                  <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
+                </button>
+                {runningSessionIds.has(session.path)
+                  ? <LoaderCircle className="spin session-running" size={12} aria-label={t("status.running")} />
+                  : <button className="session-archive-action" onClick={() => void archiveSession(session)} aria-label={t("archive.action", { title: session.title })} title={t("archive.action", { title: session.title })}><Archive size={12} /></button>}
+              </div>
             ))}
           </>}
         </div>
@@ -1266,6 +1372,15 @@ export default function App() {
         </div>
       </main>
 
+      {archiveNotice && (
+        <div className="archive-hint" role="status" aria-live="polite">
+          <Archive size={14} />
+          <span>{t("archive.hint", { title: archiveNotice.title })}</span>
+          <button type="button" onClick={() => void restoreSession(archiveNotice)}><Undo2 size={13} />{t("archive.undo")}</button>
+          <button type="button" className="archive-hint-close" onClick={() => setArchiveNotice(undefined)} aria-label={t("common.close")}><X size={13} /></button>
+        </div>
+      )}
+
       {settingsOpen && (
         <SettingsDialog
           providers={providers}
@@ -1274,10 +1389,11 @@ export default function App() {
           pinnedModelIds={pinnedModelIds}
           permission={permission}
           modes={availableModes}
-          themes={themes}
-          themeId={themeId}
+          colorScheme={colorScheme}
           profile={profile}
           showReasoningProcess={showReasoningProcess}
+          sessions={sessions}
+          runningSessionIds={runningSessionIds}
           onClose={() => setSettingsOpen(false)}
           onRefresh={async () => setProviders(await window.devinAgent.auth.status())}
           onConnected={async (value) => {
@@ -1297,8 +1413,7 @@ export default function App() {
           }}
           onPermission={(value) => void changePermission(value)}
           onPinnedModelIdsChange={(value) => void changePinnedModelIds(value)}
-          onTheme={(id) => void changeTheme(id)}
-          onRefreshThemes={() => void refreshThemes()}
+          onColorScheme={(preference) => void changeColorScheme(preference)}
           onProfile={async (nextProfile) => {
             await window.devinAgent.settings.setProfile(nextProfile);
             setProfile(nextProfile);
@@ -1312,6 +1427,11 @@ export default function App() {
               setShowReasoningProcess(previous);
               throw error;
             }
+          }}
+          onRestoreSession={restoreSession}
+          onOpenSession={async (session) => {
+            setSettingsOpen(false);
+            await openSession(session);
           }}
           onAuthStart={() => { authCancellationRef.current = false; }}
           consumeAuthCancellation={() => {
@@ -1844,25 +1964,27 @@ function SettingsDialog(props: {
   pinnedModelIds: string[];
   permission: PermissionMode;
   modes: NonNullable<AgentSnapshot["modes"]>;
-  themes: ThemeSummary[];
-  themeId: string | null;
+  colorScheme: ColorSchemePreference;
   profile: UserProfile;
   showReasoningProcess: boolean;
+  sessions: SessionSummary[];
+  runningSessionIds: Set<string>;
   onClose(): void;
   onRefresh(): Promise<void>;
   onConnected(value: ProviderId): Promise<void>;
   onPermission(value: PermissionMode): void;
   onPinnedModelIdsChange(value: string[]): void;
-  onTheme(id: string | null): void;
-  onRefreshThemes(): void;
+  onColorScheme(preference: ColorSchemePreference): void;
   onProfile(profile: UserProfile): Promise<void>;
   onShowReasoningProcess(value: boolean): Promise<void>;
+  onRestoreSession(session: SessionSummary): Promise<void>;
+  onOpenSession(session: SessionSummary): Promise<void>;
   onAuthStart(): void;
   consumeAuthCancellation(): boolean;
   onToast(message: string, type?: "info" | "error"): void;
 }) {
   const { language, locale, setLanguage, t } = useI18n();
-  const [section, setSection] = useState<"general" | "models" | "agent" | "appearance" | "about">("general");
+  const [section, setSection] = useState<"general" | "models" | "agent" | "appearance" | "archived" | "about">("general");
   const [busy, setBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [reasoningPreferenceBusy, setReasoningPreferenceBusy] = useState(false);
@@ -1883,6 +2005,10 @@ function SettingsDialog(props: {
   const visibleModelCount = organizedModels.pinned.length + organizedModels.others.length;
   const cliPathChanged = cliPath.trim() !== detectedCliPath;
   const runtimeBusy = busy || cliUpdating;
+  const archivedSessions = useMemo(
+    () => props.sessions.filter((session) => session.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    [props.sessions],
+  );
 
   useEffect(() => {
     void window.devinAgent.settings.getDevinCliPath().then((value) => {
@@ -2054,6 +2180,7 @@ function SettingsDialog(props: {
           <button className={section === "models" ? "active" : ""} onClick={() => setSection("models")}><Bot size={16} /> {t("settings.models")}</button>
           <button className={section === "agent" ? "active" : ""} onClick={() => setSection("agent")}><TerminalSquare size={16} /> {t("settings.agent")}</button>
           <button className={section === "appearance" ? "active" : ""} onClick={() => setSection("appearance")}><Sun size={16} /> {t("settings.appearance")}</button>
+          <button className={section === "archived" ? "active" : ""} onClick={() => setSection("archived")}><Archive size={16} /> {t("settings.archived")}</button>
           <button className={section === "about" ? "active" : ""} onClick={() => setSection("about")}><Info size={16} /> {t("settings.about")}</button>
         </aside>
         <section className="settings-content">
@@ -2180,46 +2307,54 @@ function SettingsDialog(props: {
           {section === "appearance" && <>
             <h2>{t("settings.appearance")}</h2>
             <p>{t("settings.appearanceDescription")}</p>
-            <div className="theme-section">
-              <div className="theme-section-heading">
-                <span><strong>{t("settings.builtInThemes")}</strong><small>{t("settings.builtInThemesDescription")}</small></span>
+            <section className="appearance-mode-section">
+              <div className="appearance-mode-heading">
+                <strong>{t("settings.colorMode")}</strong>
+                <small>{t("settings.colorModeDescription")}</small>
               </div>
-              <div className="theme-grid theme-grid-builtin">
-                <button type="button" aria-pressed={props.themeId === null} className={`theme-card ${props.themeId === null ? "selected" : ""}`} onClick={() => props.onTheme(null)}>
-                  <ThemePreview selected={props.themeId === null} />
-                  <span className="theme-card-copy">
-                    <span className="theme-card-title"><strong>Devin Agent</strong><i>{t("settings.builtIn")}</i></span>
-                    <small>{t("settings.followsSystem")}</small>
-                  </span>
-                </button>
-              </div>
-            </div>
-            <div className="theme-section theme-section-custom">
-              <div className="theme-section-heading">
-                <span><strong>{t("settings.customThemes")}</strong><small>~/.codexthemes/themes</small></span>
-                <span className="theme-section-actions">
-                  <button type="button" className="theme-action" onClick={props.onRefreshThemes} title={t("settings.refreshThemes")} aria-label={t("settings.refreshThemes")}><RefreshCwIcon /></button>
-                  <button type="button" className="theme-action theme-browse-action" onClick={() => void window.devinAgent.app.openExternal("https://codexthemes.ai")}><ExternalLink size={13} />{t("settings.browseThemes")}</button>
-                </span>
-              </div>
-              {props.themes.length > 0 ? (
-                <div className="theme-grid theme-grid-custom">
-                  {props.themes.map((theme) => (
-                    <button type="button" key={theme.id} aria-pressed={props.themeId === theme.id} className={`theme-card ${props.themeId === theme.id ? "selected" : ""}`} onClick={() => props.onTheme(theme.id)}>
-                      <ThemePreview theme={theme} selected={props.themeId === theme.id} />
-                      <span className="theme-card-copy">
-                        <span className="theme-card-title"><strong>{theme.displayName}</strong><i>{theme.mode === "dark" ? t("settings.dark") : t("settings.light")}</i></span>
-                        {theme.description && <small className="theme-card-description">{theme.description}</small>}
-                      </span>
+              <div className="appearance-mode-options" role="radiogroup" aria-label={t("settings.colorMode")}>
+                {([
+                  { value: "system", icon: Monitor, label: t("settings.auto"), description: t("settings.followsSystem") },
+                  { value: "light", icon: Sun, label: t("settings.light"), description: t("settings.alwaysLight") },
+                  { value: "dark", icon: Moon, label: t("settings.dark"), description: t("settings.alwaysDark") },
+                ] satisfies Array<{ value: ColorSchemePreference; icon: typeof Sun; label: string; description: string }>).map((option) => {
+                  const Icon = option.icon;
+                  const selected = props.colorScheme === option.value;
+                  return (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`appearance-mode-option${selected ? " selected" : ""}`}
+                      key={option.value}
+                      onClick={() => props.onColorScheme(option.value)}
+                    >
+                      <span className="appearance-mode-icon"><Icon size={17} /></span>
+                      <span className="appearance-mode-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+                      <span className="appearance-mode-check">{selected && <Check size={13} strokeWidth={2.5} />}</span>
                     </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="theme-empty">
-                  <span><strong>{t("settings.noCustomThemes")}</strong><small>{t("settings.noCustomThemesDescription")}</small></span>
-                  <button type="button" className="secondary-button" onClick={() => void window.devinAgent.app.openExternal("https://codexthemes.ai")}>{t("settings.browseThemes")}</button>
-                </div>
+                  );
+                })}
+              </div>
+            </section>
+          </>}
+          {section === "archived" && <>
+            <h2>{t("settings.archivedTitle")}</h2>
+            <p>{t("settings.archivedDescription")}</p>
+            <div className="archived-session-list">
+              {archivedSessions.length === 0 && (
+                <div className="archived-session-empty"><Archive size={20} /><strong>{t("settings.archivedEmpty")}</strong><span>{t("settings.archivedEmptyDescription")}</span></div>
               )}
+              {archivedSessions.map((session) => (
+                <div className="archived-session-row" key={session.id}>
+                  <button type="button" className="archived-session-open" onClick={() => void props.onOpenSession(session)}>
+                    <span><strong>{session.title}</strong><small>{session.cwd}</small></span>
+                    <time>{relativeTime(session.updatedAt, locale, t("status.now"))}</time>
+                    {props.runningSessionIds.has(session.path) && <LoaderCircle className="spin" size={13} aria-label={t("status.running")} />}
+                  </button>
+                  <button type="button" className="secondary-button archived-session-restore" onClick={() => void props.onRestoreSession(session)}><ArchiveRestore size={14} />{t("settings.restoreSession")}</button>
+                </div>
+              ))}
             </div>
           </>}
           {section === "about" && (
@@ -2286,52 +2421,6 @@ function SettingsModelRow({
   );
 }
 
-const DEFAULT_THEME_PREVIEW = {
-  canvas: "#f7f7f5",
-  surface: "#eeedea",
-  raised: "#ffffff",
-  text: "#20201e",
-  muted: "#74736e",
-  accent: "#282825",
-  border: "#ddddd8",
-  focus: "#6774d9",
-};
-
-function ThemePreview({ theme, selected }: { theme?: ThemeSummary; selected: boolean }) {
-  const palette = theme?.palette ?? DEFAULT_THEME_PREVIEW;
-  const style = {
-    "--theme-preview-canvas": palette.canvas,
-    "--theme-preview-sidebar": palette.surface,
-    "--theme-preview-surface": palette.raised,
-    "--theme-preview-text": palette.text,
-    "--theme-preview-muted": palette.muted,
-    "--theme-preview-accent": palette.accent,
-    "--theme-preview-border": palette.border,
-    "--theme-preview-focus": palette.focus,
-  } as CSSProperties;
-
-  return (
-    <span className="theme-preview" style={style} aria-hidden="true">
-      <span className="theme-preview-shell">
-        <span className="theme-preview-sidebar">
-          <span className="theme-preview-brand"><i /><i /></span>
-          <i /><i /><i /><i />
-        </span>
-        <span className="theme-preview-stage">
-          <span className="theme-preview-topbar"><i /><i /></span>
-          <span className="theme-preview-chat">
-            <span className="theme-preview-user-message" />
-            <span className="theme-preview-answer"><i /><i /><i /></span>
-          </span>
-          <span className="theme-preview-composer"><i /><b /></span>
-        </span>
-      </span>
-      {theme?.previewDataUrl && <img src={theme.previewDataUrl} alt="" />}
-      {selected && <span className="theme-selected-check"><Check size={12} strokeWidth={2.4} /></span>}
-    </span>
-  );
-}
-
 function CommandPalette({ availableCommands, onRunCommand, onClose, onNew, onOpen, onSettings, onInspector }: { availableCommands: AvailableCommand[]; onRunCommand(command: AvailableCommand): void; onClose(): void; onNew(): void; onOpen(): void; onSettings(): void; onInspector(): void }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -2368,6 +2457,7 @@ function SessionSearchDialog({
   const projectNames = new Map(workspaces.map((item) => [item.path, item.name]));
   const normalizedQuery = query.trim().toLowerCase();
   const results = sessions.filter((session) => {
+    if (session.archived) return false;
     if (!normalizedQuery) return true;
     const projectName = projectNames.get(session.cwd) ?? "";
     return `${session.title} ${session.preview ?? ""} ${projectName} ${session.cwd}`.toLowerCase().includes(normalizedQuery);

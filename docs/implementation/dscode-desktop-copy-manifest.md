@@ -16,7 +16,6 @@
 - `apps/desktop/src/renderer/tetris/` 与 `apps/desktop/tetris.html`（独立彩蛋页面，不接入 Agent runtime）
 - `apps/desktop/src/main/app-settings.ts`
 - `apps/desktop/src/main/recent-workspaces.ts`
-- `apps/desktop/src/main/themes.ts`
 - `apps/desktop/src/main/index.ts`（重写为 Devin-only Electron 壳）
 - `apps/desktop/src/preload/index.ts`（typed `devinAgent` bridge）
 - `apps/desktop/build/` 的构建结构；应用图标已替换为本项目原创的中性 `DA` 资产，不复用上游品牌图标

@@ -14,12 +14,9 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     homeDirectory: () => ipcRenderer.invoke("app:home-directory"),
     openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
   },
-  themes: {
-    list: () => ipcRenderer.invoke("themes:list"),
-    getActive: () => ipcRenderer.invoke("themes:get-active"),
-    setActive: (id) => ipcRenderer.invoke("themes:set-active", id),
-  },
   settings: {
+    getColorScheme: () => ipcRenderer.invoke("settings:get-color-scheme"),
+    setColorScheme: (preference) => ipcRenderer.invoke("settings:set-color-scheme", preference),
     getLanguage: () => ipcRenderer.invoke("settings:get-language"),
     setLanguage: (language) => ipcRenderer.invoke("settings:set-language", language),
     getProfile: () => ipcRenderer.invoke("settings:get-profile"),

@@ -124,7 +124,7 @@ const DEFAULT_CLIENT_NAME = "devin-desktop";
 const DEFAULT_CLIENT_VERSION = "0.1.0";
 
 /**
- * Main-process owner for one active `devin acp` process.
+ * Main-process owner for one `devin acp` process and all sessions loaded into it.
  *
  * The class intentionally exposes ACP-shaped values rather than a provider
  * abstraction. Devin's session is the source of truth; the renderer receives
@@ -138,8 +138,9 @@ export class DevinAcpHost {
   private capabilities: DevinCapabilities | null = null;
   private activeSessionId: string | null = null;
   private activeSession: DevinSessionState | null = null;
+  private readonly sessions = new Map<string, DevinSessionState>();
   private pendingSessionId: string | null = null;
-  private promptRunning = false;
+  private readonly promptRunningSessionIds = new Set<string>();
   private generation = 0;
   private stopping = false;
   private startPromise: Promise<DevinCapabilities> | null = null;
@@ -170,7 +171,11 @@ export class DevinAcpHost {
   }
 
   get isPromptRunning(): boolean {
-    return this.promptRunning;
+    return this.activeSessionId !== null && this.promptRunningSessionIds.has(this.activeSessionId);
+  }
+
+  get runningSessionIds(): readonly string[] {
+    return [...this.promptRunningSessionIds];
   }
 
   get recentDiagnostics(): readonly DevinDiagnostic[] {
@@ -340,10 +345,12 @@ export class DevinAcpHost {
     if (summary && getSessionLocked(summary)) {
       throw new DevinAcpError("locked", "锁定的 Devin session 不允许删除");
     }
-    if (sessionId === this.activeSessionId && this.promptRunning) {
+    if (this.promptRunningSessionIds.has(sessionId)) {
       throw new DevinAcpError("locked", "当前 session 正在运行，取消后才能删除");
     }
     await this.request("session/delete", { sessionId });
+    this.sessions.delete(sessionId);
+    this.promptRunningSessionIds.delete(sessionId);
     if (sessionId === this.activeSessionId) {
       this.activeSessionId = null;
       this.activeSession = null;
@@ -381,17 +388,15 @@ export class DevinAcpHost {
     if (!sessionId) throw new DevinAcpError("invalid-session", "sessionId 不能为空");
     await this.cancel(sessionId);
     await this.request("session/close", { sessionId });
+    this.sessions.delete(sessionId);
+    this.promptRunningSessionIds.delete(sessionId);
     if (sessionId === this.activeSessionId) {
       this.activeSessionId = null;
       this.activeSession = null;
     }
   }
 
-  /**
-   * Switch to another session while preserving the single-host invariant.
-   * Without `session/close`, the current process is terminated and a fresh
-   * ACP process is initialized before loading the target session.
-   */
+  /** Select another session without interrupting prompts running in siblings. */
   async switchSession(
     sessionId: string,
     options: { cwd?: string; additionalDirectories?: string[] } = {},
@@ -399,12 +404,10 @@ export class DevinAcpHost {
     if (!sessionId) throw new DevinAcpError("invalid-session", "sessionId 不能为空");
     await this.startIfNeeded();
     if (sessionId === this.activeSessionId) return this.activeSession ?? this.loadSession(sessionId, options);
-    const current = this.activeSessionId;
-    await this.cancel(current ?? undefined);
-    if (current && this.hasSessionCapability("close")) {
-      await this.closeSession(current);
-    } else if (current) {
-      await this.restartTransport();
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      this.setActiveSession(existing);
+      return existing;
     }
     return this.loadSession(sessionId, options);
   }
@@ -415,21 +418,22 @@ export class DevinAcpHost {
     requestOptions: AcpRequestOptions = {},
   ): Promise<JsonObject> {
     await this.startIfNeeded();
-    if (!sessionId || sessionId !== this.activeSessionId) {
-      throw new DevinAcpError("invalid-session", "只能向当前活动 session 发送 prompt");
+    if (!sessionId || !this.sessions.has(sessionId)) {
+      throw new DevinAcpError("invalid-session", "只能向已加载的 session 发送 prompt");
     }
-    if (this.activeSession && getSessionLocked(this.activeSession)) {
+    const session = this.sessions.get(sessionId);
+    if (session && getSessionLocked(session)) {
       throw new DevinAcpError("locked", "锁定的 Devin session 处于只读状态");
     }
-    if (this.promptRunning) {
-      throw new DevinAcpError("invalid-session", "当前 session 已有 prompt 在运行，请先取消");
+    if (this.promptRunningSessionIds.has(sessionId)) {
+      throw new DevinAcpError("invalid-session", "该 session 已有 prompt 在运行，请先取消");
     }
     const content: PromptContent[] = typeof prompt === "string" ? [{ type: "text", text: prompt }] : prompt;
     if (!content.length) throw new DevinAcpError("invalid-session", "prompt 不能为空");
     if (content.some((part) => part.type === "image") && this.requireCapabilities().promptCapabilities.image !== true) {
       throw new DevinAcpError("capability", "当前 Devin ACP 未广告图片 prompt capability");
     }
-    this.promptRunning = true;
+    this.promptRunningSessionIds.add(sessionId);
     try {
       return await this.request<JsonObject>(
         "session/prompt",
@@ -444,7 +448,7 @@ export class DevinAcpHost {
       }
       throw normalized;
     } finally {
-      this.promptRunning = false;
+      this.promptRunningSessionIds.delete(sessionId);
     }
   }
 
@@ -495,12 +499,13 @@ export class DevinAcpHost {
     this.state = "stopping";
     this.emitState();
     ++this.generation;
-    await this.cancel(this.activeSessionId ?? undefined);
+    for (const sessionId of this.promptRunningSessionIds) await this.cancel(sessionId);
     await this.stopTransport();
     this.activeSessionId = null;
     this.activeSession = null;
     this.pendingSessionId = null;
-    this.promptRunning = false;
+    this.sessions.clear();
+    this.promptRunningSessionIds.clear();
     this.state = "closed";
     this.emitState();
   }
@@ -508,33 +513,17 @@ export class DevinAcpHost {
   async restart(): Promise<DevinCapabilities> {
     this.stopping = true;
     ++this.generation;
-    await this.cancel(this.activeSessionId ?? undefined);
+    for (const sessionId of this.promptRunningSessionIds) await this.cancel(sessionId);
     await this.stopTransport();
     this.capabilities = null;
     this.activeSessionId = null;
     this.activeSession = null;
     this.pendingSessionId = null;
-    this.promptRunning = false;
+    this.sessions.clear();
+    this.promptRunningSessionIds.clear();
     this.state = "idle";
     this.stopping = false;
     return this.start();
-  }
-
-  private async restartTransport(): Promise<void> {
-    const targetGeneration = ++this.generation;
-    this.stopping = true;
-    await this.stopTransport();
-    this.transport = null;
-    this.capabilities = null;
-    this.state = "idle";
-    this.stopping = false;
-    // Keep the same binary path but renegotiate protocol and capabilities.
-    await this.start();
-    if (this.generation <= targetGeneration) {
-      // start() increments generation; this branch simply documents that old
-      // callbacks must never be considered current.
-      return;
-    }
   }
 
   private async startIfNeeded(): Promise<void> {
@@ -617,9 +606,9 @@ export class DevinAcpHost {
     if (method === "session/update") {
       const envelope = asJsonObject(params) as SessionUpdateEnvelope | null;
       const sessionId = asString(envelope?.sessionId);
-      const expectedSessionId = this.pendingSessionId ?? this.activeSessionId;
-      if (expectedSessionId && sessionId && sessionId !== expectedSessionId) {
-        this.emitDiagnostic({ code: "stale-event", message: "忽略来自非活动 session 的事件", details: { sessionId }, generation });
+      const expectedSessionId = this.pendingSessionId;
+      if (sessionId && !this.sessions.has(sessionId) && sessionId !== expectedSessionId) {
+        this.emitDiagnostic({ code: "stale-event", message: "忽略来自未知 session 的事件", details: { sessionId }, generation });
         return;
       }
       const redactedUpdate = redactSensitive(envelope?.update) as JsonObject | undefined;
@@ -642,7 +631,7 @@ export class DevinAcpHost {
     }
     const request = (asJsonObject(params) ?? {}) as PermissionRequest;
     const sessionId = asString(request.sessionId);
-    if (generation !== this.generation || (this.activeSessionId && sessionId && sessionId !== this.activeSessionId)) {
+    if (generation !== this.generation || (sessionId && !this.sessions.has(sessionId) && sessionId !== this.pendingSessionId)) {
       return { outcome: { outcome: "cancelled" } };
     }
     if (!this.options.onPermissionRequest) return { outcome: { outcome: "cancelled" } };
@@ -651,9 +640,9 @@ export class DevinAcpHost {
   }
 
   private setActiveSession(session: DevinSessionState): void {
+    this.sessions.set(session.sessionId, session);
     this.activeSessionId = session.sessionId;
     this.activeSession = session;
-    this.promptRunning = false;
   }
 
   private sessionFromResult(result: JsonObject, cwd: string, fallbackSessionId?: string): DevinSessionState {

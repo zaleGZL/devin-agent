@@ -18,7 +18,6 @@ import { discoverDevinBinary, validateDevinBinary } from "./devin-discovery";
 import { checkDevinCliUpdate, installDevinCliUpdate, type ManifestFetcher } from "./devin-update";
 import { AppSettings } from "./app-settings";
 import { RecentWorkspaces } from "./recent-workspaces";
-import { listCodexThemes } from "./themes";
 import {
   archiveSession,
   configureSessionIndex,
@@ -45,6 +44,7 @@ import type {
   AgentSnapshot,
   AgentStartOptions,
   AuthUiEvent,
+  ColorSchemePreference,
   FilePreview,
   FilePreviewKind,
   DevinCliUpdateStatus,
@@ -126,7 +126,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
     const Constructor = (runtime as unknown as { DevinAcpHost?: new (options: any) => any }).DevinAcpHost;
     if (!Constructor) return undefined;
     let latestSnapshot: AgentSnapshot | undefined;
-    let advertisedCommands = new Set<string>();
+    const advertisedCommands = new Map<string, Set<string>>();
     const configuredPath = await appSettings.getDevinCliPath();
     const host = new Constructor({
       ...(configuredPath ? { binaryPath: configuredPath } : {}),
@@ -134,12 +134,13 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
         if (event.update && typeof event.update === "object") {
           const update = event.update as Record<string, unknown>;
           if (update.sessionUpdate === "available_commands_update" && Array.isArray(update.availableCommands)) {
-            advertisedCommands = new Set(update.availableCommands.flatMap((command) => {
+            const commands = new Set(update.availableCommands.flatMap((command) => {
               if (typeof command === "string") return [command.replace(/^\//, "").toLowerCase()];
               if (!command || typeof command !== "object") return [];
               const name = (command as Record<string, unknown>).name ?? (command as Record<string, unknown>).command;
               return typeof name === "string" ? [name.replace(/^\//, "").toLowerCase()] : [];
             }));
+            if (event.sessionId) advertisedCommands.set(event.sessionId, commands);
           }
         }
         mainWindow?.webContents.send("agent:event", {
@@ -177,7 +178,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
     const raw = host as any;
     let pendingRuntimeStart: { key: string; promise: Promise<AgentSnapshot> } | undefined;
     const startRuntime = async (options: AgentStartOptions): Promise<AgentSnapshot> => {
-      let capabilities = await raw.start?.();
+      const capabilities = await raw.start?.();
       const targetSessionId = options.sessionId ?? options.sessionPath;
       const cwd = options.cwd ?? raw.session?.cwd;
       let session: Record<string, unknown> | undefined;
@@ -190,16 +191,11 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
             : await raw.loadSession?.(targetSessionId, { cwd, additionalDirectories: options.additionalDirectories });
       } else {
         if (!cwd) throw new Error("Open a workspace before creating a Devin session");
-        if (raw.sessionId) {
-          await raw.cancel?.();
-          const canClose = raw.negotiatedCapabilities?.sessionCapabilities?.close !== undefined;
-          if (canClose) await raw.closeSession?.();
-          else capabilities = await raw.restart?.();
-        }
         session = await raw.newSession?.(cwd, { additionalDirectories: options.additionalDirectories });
       }
       if (!session) throw new Error("Devin ACP did not return a session");
       latestSnapshot = buildAgentSnapshot(capabilities ?? raw.negotiatedCapabilities, session, options.model || undefined);
+      latestSnapshot.state.isStreaming = raw.isPromptRunning === true;
       return latestSnapshot;
     };
     return {
@@ -225,6 +221,8 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
       async command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T> {
         const payload = data ?? {};
         if (type === "prompt" || type === "follow_up") {
+          const sessionId = raw.sessionId as string | null;
+          if (!sessionId) throw new Error("No active Devin session");
           const prompt = typeof payload.message === "string" ? payload.message : typeof payload.prompt === "string" ? payload.prompt : "";
           const images = Array.isArray(payload.images) ? payload.images : [];
           const content = [{ type: "text", text: prompt }, ...images.filter((image): image is Record<string, unknown> => Boolean(image && typeof image === "object"))];
@@ -232,11 +230,22 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
             await raw.cancel?.();
             await waitUntil(() => raw.isPromptRunning !== true, 5_000);
           }
-          mainWindow?.webContents.send("agent:event", { type: "agent_start", sessionId: raw.sessionId, timestamp: Date.now() });
+          const existingSummary = (await listSessions()).find((session) => session.id === sessionId);
+          if (existingSummary) {
+            const firstPrompt = (existingSummary.messageCount ?? 0) === 0;
+            await upsertSessionSummary({
+              ...existingSummary,
+              title: firstPrompt && prompt.trim() ? prompt.trim().slice(0, 80) : existingSummary.title,
+              preview: prompt.trim().slice(0, 160),
+              updatedAt: new Date().toISOString(),
+              messageCount: (existingSummary.messageCount ?? 0) + 1,
+            });
+          }
+          mainWindow?.webContents.send("agent:event", { type: "agent_start", sessionId, timestamp: Date.now() });
           try {
-            return await raw.prompt?.(content, raw.sessionId) as T;
+            return await raw.prompt?.(content, sessionId) as T;
           } finally {
-            mainWindow?.webContents.send("agent:event", { type: "agent_settled", sessionId: raw.sessionId, timestamp: Date.now() });
+            mainWindow?.webContents.send("agent:event", { type: "agent_settled", sessionId, timestamp: Date.now() });
           }
         }
         if (type === "cancel" || type === "abort") return await raw.cancel?.() as T;
@@ -246,10 +255,10 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
         if (type === "new_session") return await raw.newSession?.(typeof payload.cwd === "string" ? payload.cwd : process.cwd()) as T;
         if (type === "get_state") return latestSnapshot?.state as T;
         if (type === "get_available_models") return (latestSnapshot?.models ?? []) as T;
-        if (type === "get_commands") return [...advertisedCommands] as T;
+        if (type === "get_commands") return [...(advertisedCommands.get(raw.sessionId) ?? [])] as T;
         if (type === "reconnect") return await raw.restart?.() as T;
         if (type === "handoff") {
-          if (!advertisedCommands.has("handoff")) throw new Error("当前 Devin session 未广告 /handoff");
+          if (!advertisedCommands.get(raw.sessionId)?.has("handoff")) throw new Error("当前 Devin session 未广告 /handoff");
           return await raw.prompt?.("/handoff", raw.sessionId) as T;
         }
         return undefined as T;
@@ -356,10 +365,8 @@ function registerIpc(): void {
     await shell.openExternal(url);
   });
 
-  ipcMain.handle("themes:list", () => listCodexThemes());
-  ipcMain.handle("themes:get-active", () => appSettings.getThemeId());
-  ipcMain.handle("themes:set-active", (_event, id: unknown) => appSettings.setThemeId(id === null ? null : expectString(id, "theme id", 200)));
-
+  ipcMain.handle("settings:get-color-scheme", () => appSettings.getColorScheme());
+  ipcMain.handle("settings:set-color-scheme", (_event, preference: unknown) => appSettings.setColorScheme(expectColorScheme(preference)));
   ipcMain.handle("settings:get-language", () => appSettings.getLanguage());
   ipcMain.handle("settings:set-language", (_event, language: unknown) => appSettings.setLanguage(expectLanguage(language)));
   ipcMain.handle("settings:get-profile", () => appSettings.getProfile());
@@ -457,7 +464,7 @@ function registerIpc(): void {
       const remote = await agentHost?.listSessions?.(requestedCwd);
       if (remote) {
         for (const summary of remote) await upsertSessionSummary(summary);
-        return remote;
+        return listSessions(requestedCwd);
       }
     } catch (error) {
       mainWindow?.webContents.send("agent:error", safeError(error));
@@ -493,7 +500,24 @@ function registerIpc(): void {
     activeAgentCwd = options.cwd;
     if (options.project && options.cwd) await recentWorkspaces.touch(options.cwd);
     if (!agentHost?.start) throw new Error("Devin ACP runtime is not available. Install Devin CLI and restart the app.");
-    return agentHost.start(options);
+    const snapshot = await agentHost.start(options);
+    if (snapshot.sessionId && options.cwd) {
+      const now = new Date().toISOString();
+      const existing = (await listSessions()).find((session) => session.id === snapshot.sessionId);
+      const snapshotModel = snapshot.state.model as { id?: string } | undefined;
+      await upsertSessionSummary({
+        id: snapshot.sessionId,
+        path: snapshot.sessionId,
+        cwd: options.cwd,
+        title: existing?.title ?? "New task",
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: existing?.updatedAt ?? now,
+        provider: "devin",
+        ...(snapshotModel?.id ? { model: snapshotModel.id } : {}),
+        ...(snapshot.locked !== undefined ? { locked: snapshot.locked } : {}),
+      });
+    }
+    return snapshot;
   });
   ipcMain.handle("agent:stop", () => agentHost?.stop?.());
   ipcMain.handle("agent:command", (_event, type: unknown, data: unknown) => {
@@ -667,6 +691,10 @@ function expectRecord(value: unknown, name: string): Record<string, unknown> {
 }
 function expectLanguage(value: unknown): LanguagePreference {
   if (value !== "system" && value !== "zh-CN" && value !== "en") throw new Error("Unsupported language preference");
+  return value;
+}
+function expectColorScheme(value: unknown): ColorSchemePreference {
+  if (value !== "system" && value !== "light" && value !== "dark") throw new Error("Unsupported color scheme preference");
   return value;
 }
 function expectProfile(value: unknown): UserProfile {

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { LanguagePreference, UserProfile } from "../shared/types";
+import type { ColorSchemePreference, LanguagePreference, UserProfile } from "../shared/types";
 
 interface AppSettingsData {
-  themeId?: string | null;
+  colorScheme?: ColorSchemePreference;
   language?: LanguagePreference;
   profile?: UserProfile;
   showReasoningProcess?: boolean;
@@ -13,6 +13,7 @@ interface AppSettingsData {
 }
 
 const LANGUAGE_PREFERENCES = new Set<LanguagePreference>(["system", "zh-CN", "en"]);
+const COLOR_SCHEME_PREFERENCES = new Set<ColorSchemePreference>(["system", "light", "dark"]);
 const MAX_PINNED_MODELS = 32;
 const MAX_MODEL_ID_LENGTH = 200;
 
@@ -22,14 +23,15 @@ export class AppSettings {
     private readonly defaultNickname: string = systemNickname(),
   ) {}
 
-  async getThemeId(): Promise<string | null> {
+  async getColorScheme(): Promise<ColorSchemePreference> {
     const data = await this.read();
-    return typeof data.themeId === "string" ? data.themeId : null;
+    return data.colorScheme && COLOR_SCHEME_PREFERENCES.has(data.colorScheme) ? data.colorScheme : "system";
   }
 
-  async setThemeId(themeId: string | null): Promise<void> {
+  async setColorScheme(colorScheme: ColorSchemePreference): Promise<void> {
+    if (!COLOR_SCHEME_PREFERENCES.has(colorScheme)) throw new Error("Unsupported color scheme preference");
     const data = await this.read();
-    data.themeId = themeId;
+    data.colorScheme = colorScheme;
     await this.write(data);
   }
 
