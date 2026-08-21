@@ -2153,21 +2153,19 @@ function SettingsDialog(props: {
                 </label>
               </div>
               <div className="settings-model-list">
-                <div className="settings-model-scroll">
-                  {organizedModels.pinned.length > 0 && <>
-                    <div className="settings-model-section-label">{t("model.pinned")}</div>
-                    {organizedModels.pinned.map((item) => (
-                      <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
-                    ))}
-                  </>}
-                  {organizedModels.others.length > 0 && <>
-                    <div className="settings-model-section-label">{t("model.all")}</div>
-                    {organizedModels.others.map((item) => (
-                      <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned={false} onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
-                    ))}
-                  </>}
-                  {visibleModelCount === 0 && <div className="settings-model-empty">{props.models.length === 0 ? t("settings.modelsUnavailable") : t("model.noResults")}</div>}
-                </div>
+                {organizedModels.pinned.length > 0 && <>
+                  <div className="settings-model-section-label">{t("model.pinned")}</div>
+                  {organizedModels.pinned.map((item) => (
+                    <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
+                  ))}
+                </>}
+                {organizedModels.others.length > 0 && <>
+                  <div className="settings-model-section-label">{t("model.all")}</div>
+                  {organizedModels.others.map((item) => (
+                    <SettingsModelRow key={item.id} model={item} current={item.id === props.model} pinned={false} onTogglePin={() => props.onPinnedModelIdsChange(togglePinnedModelId(props.pinnedModelIds, item.id))} />
+                  ))}
+                </>}
+                {visibleModelCount === 0 && <div className="settings-model-empty">{props.models.length === 0 ? t("settings.modelsUnavailable") : t("model.noResults")}</div>}
               </div>
             </section>
           </>}
