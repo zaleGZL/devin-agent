@@ -32,7 +32,7 @@ Devin Coding Agent 是一个原生桌面客户端，通过 [Agent Client Protoco
 ## 快速开始
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/zaleGZL/devin-agent.git
 cd devin-agent
 pnpm install
 pnpm dev

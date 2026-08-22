@@ -34,7 +34,7 @@ through ACP.
 ## Quick start
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/zaleGZL/devin-agent.git
 cd devin-agent
 pnpm install
 pnpm dev
