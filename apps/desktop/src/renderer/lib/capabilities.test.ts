@@ -24,7 +24,9 @@ describe("Devin capability helpers", () => {
   });
 
   it("only exposes advertised commands and gates cloud handoff", () => {
-    expect(visibleCommands(capabilities.commands, "hand")).toEqual([{ name: "/handoff", description: "cloud" }]);
+    expect(visibleCommands(capabilities.commands, "hand")).toEqual([
+      expect.objectContaining({ name: "/handoff", description: "cloud" }),
+    ]);
     expect(getFeatureGate(capabilities, "handoff-cloud")).toMatchObject({ enabled: true, cloud: true });
     expect(getFeatureGate(capabilities, "checkpoint")).toMatchObject({ enabled: false, source: "unsupported" });
   });

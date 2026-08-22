@@ -172,13 +172,28 @@ export interface SessionPromptContentImage extends JsonObject {
 
 export interface SessionPromptContentResource extends JsonObject {
   type: "resource";
-  resource: JsonObject;
+  resource: {
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    [key: string]: JsonValue | undefined;
+  };
+}
+
+export interface SessionPromptContentResourceLink extends JsonObject {
+  type: "resource_link";
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  size?: number;
 }
 
 export type PromptContent =
   | SessionPromptContentText
   | SessionPromptContentImage
   | SessionPromptContentResource
+  | SessionPromptContentResourceLink
   | JsonObject;
 
 export interface PromptParams extends JsonObject {

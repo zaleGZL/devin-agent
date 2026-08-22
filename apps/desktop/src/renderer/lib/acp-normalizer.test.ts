@@ -12,11 +12,31 @@ describe("ACP update normalizer", () => {
     });
   });
 
+  it("keeps explicit streamed resources as mentions without diagnosing them as unknown", () => {
+    const text = normalizeAcpUpdate({ sessionId: "s-1", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Review this" }, messageId: "m-1" } });
+    const resource = normalizeAcpUpdate({ sessionId: "s-1", update: { sessionUpdate: "user_message_chunk", content: { type: "resource_link", uri: "file:///workspace/docs/guide.md", name: "@docs/guide.md", size: 42 }, messageId: "m-1" } });
+    expect(resource).toMatchObject({
+      type: "message_chunk",
+      role: "user",
+      text: "",
+      mentions: [{ kind: "file", path: "docs/guide.md", size: 42 }],
+    });
+
+    let state = createConversationState("s-1");
+    state = reduceConversation(state, text);
+    state = reduceConversation(state, resource);
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ text: "Review this", mentions: [{ kind: "file", path: "docs/guide.md" }] });
+  });
+
   it("maps tool lifecycle, structured plans, commands and mode updates", () => {
     expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read", status: "in_progress", rawInput: { path: "README.md" } } })).toMatchObject({ type: "tool_start", toolId: "t1", args: { path: "README.md" } });
     expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: "ok" } })).toMatchObject({ type: "tool_end", toolId: "t1", output: "ok", status: "complete" });
     expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "plan", entries: [{ content: "Implement", status: "in_progress" }] } })).toMatchObject({ type: "plan", plan: { steps: [{ step: "Implement", status: "in_progress" }] } });
-    expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "/handoff", description: "Cloud" }] } })).toMatchObject({ type: "commands", commands: [{ name: "/handoff" }] });
+    expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "/agents:research", description: "Research", _meta: { "cognition.ai/category": "Skills" } }] } })).toMatchObject({
+      type: "commands",
+      commands: [{ name: "/agents:research", category: "Skills", raw: { _meta: { "cognition.ai/category": "Skills" } } }],
+    });
     expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "current_mode_update", currentModeId: "smart" } })).toMatchObject({ type: "mode", modeId: "smart" });
     expect(normalizeAcpUpdate({ sessionId: "s", update: { sessionUpdate: "config_option_update", id: "model", currentValue: "vision", options: [{ value: "vision", _meta: { "cognition.ai/supportsImages": true } }] } })).toMatchObject({ type: "config", option: { id: "model", options: [{ value: "vision", supportsImages: true }] } });
     expect(normalizeAcpUpdate({

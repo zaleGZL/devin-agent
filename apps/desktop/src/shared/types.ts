@@ -1,6 +1,7 @@
 /** Public types shared by the Electron preload and React renderer. */
 
 import type { DevinCapabilities } from "./capabilities";
+import type { MentionSearchRequest, MentionSearchResult, SkillListRequest, SkillMentionRef } from "./mentions";
 
 export const PROVIDER_IDS = ["devin"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -222,6 +223,11 @@ export interface DesktopApi {
     validPreviewPaths(paths: string[]): Promise<string[]>;
     preview(path: string): Promise<FilePreview>;
     openPreview(id: string): Promise<void>;
+  };
+  mentions: {
+    setWorkspace(path?: string): Promise<void>;
+    search(request: MentionSearchRequest): Promise<MentionSearchResult[]>;
+    skills(request: SkillListRequest): Promise<SkillMentionRef[]>;
   };
   sessions: {
     list(cwd?: string): Promise<SessionSummary[]>;

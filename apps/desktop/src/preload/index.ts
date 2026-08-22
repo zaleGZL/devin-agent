@@ -48,6 +48,11 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     preview: (filePath) => ipcRenderer.invoke("files:preview", filePath),
     openPreview: (id) => ipcRenderer.invoke("files:open-preview", id),
   },
+  mentions: {
+    setWorkspace: (workspacePath) => ipcRenderer.invoke("mentions:set-workspace", workspacePath),
+    search: (request) => ipcRenderer.invoke("mentions:search", request),
+    skills: (request) => ipcRenderer.invoke("mentions:skills", request),
+  },
   sessions: {
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
     delete: (id) => ipcRenderer.invoke("sessions:delete", id),

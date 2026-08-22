@@ -181,6 +181,23 @@ describe("DevinAcpHost contract", () => {
     await host.stop();
   });
 
+  it("forwards ACP embedded resources and resource links without flattening them", async () => {
+    const { host, transports } = createHost();
+    await host.start();
+    await host.newSession("/workspace");
+    const content = [
+      { type: "text" as const, text: "review" },
+      { type: "resource" as const, resource: { uri: "file:///workspace/src/app.ts", mimeType: "text/typescript", text: "export {};" } },
+      { type: "resource_link" as const, uri: "file:///workspace/docs", name: "@docs/", description: "Workspace directory" },
+    ];
+
+    await host.prompt(content, "new-session");
+
+    expect(transports[0]?.requests.find((request) => request.method === "session/prompt")?.params)
+      .toEqual({ sessionId: "new-session", prompt: content });
+    await host.stop();
+  });
+
   it("accepts history updates emitted before session/load returns", async () => {
     const updates = vi.fn();
     const diagnostics = vi.fn();

@@ -18,6 +18,9 @@ import { discoverDevinBinary, validateDevinBinary } from "./devin-discovery";
 import { createDevinWorkspaceUrl } from "./devin-desktop";
 import { listWorkspaceChanges, readWorkspaceDiff } from "./git-changes";
 import { checkDevinCliUpdate, installDevinCliUpdate, type ManifestFetcher } from "./devin-update";
+import { MentionIndex } from "./mention-index";
+import { serializeMentionPrompt } from "./mention-prompt";
+import { SkillIndex } from "./skill-index";
 import { AppSettings } from "./app-settings";
 import { RecentWorkspaces } from "./recent-workspaces";
 import {
@@ -60,6 +63,8 @@ import type {
   SessionSummary,
   UserProfile,
 } from "../shared/types";
+import { parseMentionSearchRequest, parseSkillListRequest } from "../shared/mentions";
+import type { PromptContent } from "../shared/acp-types";
 
 /**
  * The ACP implementation is owned by the runtime layer. The shell only relies
@@ -88,6 +93,10 @@ const sessionWindows = new Map<string, BrowserWindow>();
 const auxiliaryWindowIds = new Set<number>();
 const rendererSessionIds = new Map<number, string>();
 const rendererCwds = new Map<number, string>();
+const rendererWorkspaces = new Map<number, string>();
+const mentionIndex = new MentionIndex();
+const skillIndex = new SkillIndex();
+const mentionSearchControllers = new Map<number, AbortController>();
 const previewFiles = new Map<string, { filePath: string; rootPath: string }>();
 let activePreviewId: string | undefined;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -138,6 +147,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
     if (!Constructor) return undefined;
     let latestSnapshot: AgentSnapshot | undefined;
     const advertisedCommands = new Map<string, Set<string>>();
+    const advertisedCommandMetadata = new Map<string, Record<string, unknown>[]>();
     const configuredPath = await appSettings.getDevinCliPath();
     const host = new Constructor({
       ...(configuredPath ? { binaryPath: configuredPath } : {}),
@@ -151,7 +161,13 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
               const name = (command as Record<string, unknown>).name ?? (command as Record<string, unknown>).command;
               return typeof name === "string" ? [name.replace(/^\//, "").toLowerCase()] : [];
             }));
-            if (event.sessionId) advertisedCommands.set(event.sessionId, commands);
+            if (event.sessionId) {
+              advertisedCommands.set(event.sessionId, commands);
+              advertisedCommandMetadata.set(event.sessionId, update.availableCommands.flatMap((command) => {
+                if (typeof command === "string") return [{ name: command }];
+                return command && typeof command === "object" ? [command as Record<string, unknown>] : [];
+              }));
+            }
           }
         }
         broadcastToRenderers("agent:event", {
@@ -237,9 +253,21 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
         if (type === "prompt" || type === "follow_up") {
           const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
           if (!sessionId) throw new Error("No active Devin session");
-          const prompt = typeof payload.message === "string" ? payload.message : typeof payload.prompt === "string" ? payload.prompt : "";
+          let prompt = typeof payload.message === "string" ? payload.message : typeof payload.prompt === "string" ? payload.prompt : "";
           const images = Array.isArray(payload.images) ? payload.images : [];
-          const content = [{ type: "text", text: prompt }, ...images.filter((image): image is Record<string, unknown> => Boolean(image && typeof image === "object"))];
+          let content: PromptContent[] = [{ type: "text", text: prompt }];
+          if (payload.mentions !== undefined) {
+            const serialized = await serializeMentionPrompt({
+              workspaceRoot: typeof payload.workspacePath === "string" ? payload.workspacePath : undefined,
+              mentions: payload.mentions,
+              text: prompt,
+              embeddedContext: raw.negotiatedCapabilities?.promptCapabilities?.embeddedContext === true,
+              availableSkills: skillIndex.getSession(sessionId) ?? [],
+            });
+            prompt = serialized.text;
+            content = serialized.content;
+          }
+          content.push(...images.filter((image): image is Record<string, unknown> => Boolean(image && typeof image === "object")));
           if (type === "follow_up") {
             await raw.cancel?.(sessionId);
             await waitUntil(
@@ -369,6 +397,9 @@ function createWindow(options: { sessionId?: string; title?: string } = {}): Bro
     auxiliaryWindowIds.delete(webContentsId);
     rendererSessionIds.delete(webContentsId);
     rendererCwds.delete(webContentsId);
+    rendererWorkspaces.delete(webContentsId);
+    mentionSearchControllers.get(webContentsId)?.abort();
+    mentionSearchControllers.delete(webContentsId);
     if (options.sessionId && sessionWindows.get(options.sessionId) === browserWindow) sessionWindows.delete(options.sessionId);
     if (mainWindow === browserWindow) mainWindow = rendererWindows()[0];
     if (rendererWindows().length === 0) void agentHost?.stop?.();
@@ -542,6 +573,43 @@ function registerIpc(): void {
     const error = await shell.openPath(preview.filePath);
     if (error) throw new Error(error);
   });
+  ipcMain.handle("mentions:set-workspace", async (ipcEvent, value: unknown) => {
+    if (value === undefined) {
+      rendererWorkspaces.delete(ipcEvent.sender.id);
+      return;
+    }
+    rendererWorkspaces.set(ipcEvent.sender.id, await resolveKnownWorkspace(value));
+  });
+  ipcMain.handle("mentions:search", async (ipcEvent, value: unknown) => {
+    const request = parseMentionSearchRequest(value);
+    const workspacePath = rendererWorkspaces.get(ipcEvent.sender.id);
+    if (!workspacePath || path.resolve(request.workspacePath) !== path.resolve(workspacePath)) {
+      throw new Error("Mention search is limited to the currently selected project");
+    }
+    mentionSearchControllers.get(ipcEvent.sender.id)?.abort();
+    const controller = new AbortController();
+    mentionSearchControllers.set(ipcEvent.sender.id, controller);
+    try {
+      return await mentionIndex.search(workspacePath, request.kind, request.query, request.limit, controller.signal);
+    } finally {
+      if (mentionSearchControllers.get(ipcEvent.sender.id) === controller) mentionSearchControllers.delete(ipcEvent.sender.id);
+    }
+  });
+  ipcMain.handle("mentions:skills", async (ipcEvent, value: unknown) => {
+    const request = parseSkillListRequest(value);
+    const workspacePath = rendererWorkspaces.get(ipcEvent.sender.id);
+    if (request.workspacePath && (!workspacePath || path.resolve(request.workspacePath) !== path.resolve(workspacePath))) {
+      throw new Error("Skill discovery is limited to the currently selected project");
+    }
+    if (request.sessionId) {
+      const activeSessionId = rendererSessionIds.get(ipcEvent.sender.id);
+      if (activeSessionId && activeSessionId !== request.sessionId) throw new Error("Skill discovery is limited to the active session");
+      return [...await skillIndex.bindSession(request.sessionId, workspacePath)];
+    }
+    return [...(request.refresh
+      ? await skillIndex.refreshDraft(workspacePath)
+      : await skillIndex.listDraft(workspacePath))];
+  });
 
   ipcMain.handle("sessions:list", async (ipcEvent, cwd: unknown) => {
     const requestedCwd = cwd === undefined ? undefined : expectString(cwd, "cwd", 4_096);
@@ -579,6 +647,7 @@ function registerIpc(): void {
     if (!agentHost?.deleteSession) throw new Error("当前 Devin ACP 未提供 session/delete");
     await agentHost.deleteSession(sessionId);
     await removeSessionSummary(sessionId);
+    skillIndex.deleteSession(sessionId);
   });
 
   ipcMain.handle("auth:status", async (): Promise<ProviderStatus[]> => [await getDevinProviderStatus()]);
@@ -598,10 +667,21 @@ function registerIpc(): void {
   ipcMain.handle("agent:start", async (ipcEvent, value: unknown) => {
     const options = expectAgentStartOptions(value);
     if (options.cwd) rendererCwds.set(ipcEvent.sender.id, options.cwd);
-    if (options.project && options.cwd) await recentWorkspaces.touch(options.cwd);
+    if (options.project && options.cwd) {
+      await recentWorkspaces.touch(options.cwd);
+      rendererWorkspaces.set(ipcEvent.sender.id, await resolveKnownWorkspace(options.cwd));
+    } else {
+      rendererWorkspaces.delete(ipcEvent.sender.id);
+    }
     if (!agentHost?.start) throw new Error("Devin ACP runtime is not available. Install Devin CLI and restart the app.");
+    const workspacePath = rendererWorkspaces.get(ipcEvent.sender.id);
+    const creatingNewSession = !options.sessionId && !options.sessionPath;
+    const preparedSkills = creatingNewSession ? await skillIndex.refreshDraft(workspacePath) : undefined;
+    if (creatingNewSession && workspacePath) await mentionIndex.refresh(workspacePath);
     const snapshot = await agentHost.start(options);
     if (snapshot.sessionId) {
+      if (preparedSkills) skillIndex.setSessionSnapshot(snapshot.sessionId, preparedSkills);
+      else await skillIndex.bindSession(snapshot.sessionId, workspacePath);
       rendererSessionIds.set(ipcEvent.sender.id, snapshot.sessionId);
       if (auxiliaryWindowIds.has(ipcEvent.sender.id)) {
         const senderWindow = windowForSender(ipcEvent.sender.id);
@@ -638,9 +718,12 @@ function registerIpc(): void {
     if (!ALLOWED_AGENT_COMMANDS.has(command)) throw new Error(`Unsupported agent command: ${command}`);
     const suppliedPayload = data === undefined ? undefined : expectRecord(data, "agent command data");
     const rendererSessionId = rendererSessionIds.get(ipcEvent.sender.id);
-    const payload = rendererSessionId && typeof suppliedPayload?.sessionId !== "string"
+    const sessionPayload = rendererSessionId && typeof suppliedPayload?.sessionId !== "string"
       ? { ...suppliedPayload, sessionId: rendererSessionId }
       : suppliedPayload;
+    const payload = command === "prompt" || command === "follow_up"
+      ? { ...sessionPayload, workspacePath: rendererWorkspaces.get(ipcEvent.sender.id) }
+      : sessionPayload;
     if (!agentHost?.request && !agentHost?.command) throw new Error("Devin ACP runtime is not available");
     return agentHost.request?.(command, payload) ?? agentHost.command?.(command, payload);
   });

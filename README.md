@@ -22,8 +22,21 @@ through ACP.
 - Workspace management with multiple Devin sessions
 - Streaming conversations with reasoning, plans, and tool activity
 - Image input, dynamic models and modes, permission requests
+- `@` references for project files, directories, and cached global/project Skills
 - File preview, themes, language switching, and command palette
 - Capabilities are negotiated at runtime from the ACP — nothing is hardcoded
+
+### Composer `@` references
+
+Type `@` in the composer to reference **Files**, **Directories**, or **Skills**. Files and
+directories are available only after selecting a project; the app never scans your home
+directory as a fallback. UTF-8 files up to 512 KiB are embedded only when Devin advertises
+ACP embedded-context support. Binary, larger, or unsupported files are sent as resource
+links. Directory references are links only and are never recursively expanded. Skill metadata
+is discovered from Devin-supported global and project `SKILL.md` locations, with project Skills
+overriding same-named global Skills. Each new session receives an immutable snapshot; selecting
+a Skill sends Devin's documented `@skills:<name>` syntax. Devin CLI, not the desktop app, loads
+and executes the Skill body.
 
 ## Prerequisites
 
@@ -75,8 +88,32 @@ pnpm pack:mac           # build an unsigned Apple Silicon DMG, copy it to Downlo
 3. Run `pnpm publish:desktop` — this tags `desktop-v<version>`, pushes it, and CI builds
    and publishes installers to GitHub Releases.
 
-Installers are currently **unsigned**. macOS users must right-click → Open to bypass
-Gatekeeper; Windows will show a SmartScreen warning.
+Installers are currently **unsigned and not notarized**. Windows will show a SmartScreen
+warning. Follow the steps below for macOS.
+
+### Install an unsigned macOS build
+
+Gatekeeper may report that the developer cannot be verified or that Apple cannot check the
+app for malicious software. Only bypass these warnings for a DMG downloaded from this
+project's [official GitHub Releases](https://github.com/zaleGZL/devin-agent/releases).
+
+1. Download the correct DMG (`arm64` for Apple Silicon or `x64` for Intel), open it, and drag
+   **Devin Agent** into **Applications**.
+2. Try to open the installed app once. Then open **System Settings → Privacy & Security**,
+   scroll to **Security**, click **Open Anyway**, authenticate, and confirm **Open**. See
+   [Apple's Gatekeeper instructions](https://support.apple.com/en-us/102445).
+3. If a verified download is still reported as damaged or cannot be opened, remove the
+   quarantine attribute from this app only, then launch it:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Devin Agent.app"
+   open "/Applications/Devin Agent.app"
+   ```
+
+   If the first command reports a permission error, run that command again with `sudo`.
+
+Do not disable Gatekeeper globally. Removing quarantine bypasses a macOS security check, so
+verify the download source before running the command.
 
 ## Platform notes
 

@@ -113,6 +113,11 @@ export function createPreviewApi(): DesktopApi {
       }),
       openPreview: async () => undefined,
     },
+    mentions: {
+      setWorkspace: async () => undefined,
+      search: async () => [],
+      skills: async () => [],
+    },
     sessions: {
       list: async () => [
         previewSession("1", "Add desktop workspace support", 0, 4),

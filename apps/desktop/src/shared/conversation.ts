@@ -6,6 +6,8 @@
  * this stable shape before the renderer sees them.
  */
 
+import type { MentionRef } from "./mentions";
+
 export type ChatRole = "user" | "assistant";
 export type ToolStatus = "pending" | "running" | "complete" | "error" | "cancelled";
 
@@ -51,6 +53,7 @@ export interface ChatMessage {
   queued?: boolean;
   images: ChatImage[];
   annotations?: ChatAnnotation[];
+  mentions?: MentionRef[];
   tools: ToolActivity[];
   work: WorkItem[];
 }
@@ -91,6 +94,8 @@ export interface AvailableCommand {
   name: string;
   description?: string;
   input?: unknown;
+  category?: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface ConfigOptionValue {
@@ -134,6 +139,7 @@ export type AgentEvent =
       timestamp?: number;
       phase?: "start" | "update" | "end";
       images?: ChatImage[];
+      mentions?: MentionRef[];
     }
   | {
       type: "thought_chunk";

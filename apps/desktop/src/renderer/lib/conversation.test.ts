@@ -76,6 +76,27 @@ describe("conversation events", () => {
     expect(messages[0]?.images).toHaveLength(1);
   });
 
+  it("keeps optimistic mentions and restores only explicit ACP resources", () => {
+    const mention = { id: "file:docs/guide.md", kind: "file" as const, label: "guide.md", path: "docs/guide.md" };
+    expect(optimisticUserMessage("Review this", false, [], [], [mention]).mentions).toEqual([mention]);
+
+    const stored = normalizeMessages([{
+      role: "user",
+      content: [
+        { type: "text", text: "Review @plain-text only" },
+        { type: "resource_link", uri: "file:///workspace/docs", name: "@docs/" },
+        { type: "resource_link", uri: "file:///workspace/docs/guide.md", name: "@docs/guide.md", size: 42 },
+        { type: "resource", resource: { uri: "file:///workspace/src/app.ts", mimeType: "text/plain", text: "export {};" } },
+      ],
+    }]);
+    expect(stored[0]?.mentions).toEqual([
+      expect.objectContaining({ kind: "directory", path: "docs" }),
+      expect.objectContaining({ kind: "file", path: "docs/guide.md", size: 42 }),
+      expect.objectContaining({ kind: "file", path: "app.ts" }),
+    ]);
+    expect(stored[0]?.text).toBe("Review @plain-text only");
+  });
+
   it("restores response annotations without exposing the transport envelope", () => {
     const wireText = formatPromptWithAnnotations("Please fix this.", [{
       id: "annotation-1",

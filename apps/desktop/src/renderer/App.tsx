@@ -73,6 +73,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import type { MentionKind, MentionRef, MentionSearchResult, SkillMentionRef } from "../shared/mentions";
 import type {
   AgentSnapshot,
   AgentSessionStats,
@@ -129,6 +130,7 @@ import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
 import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
+import { addMention, findAtTrigger, mergeRootMentionOptions, rankSkillMentions, removeAtTrigger } from "./lib/mentions";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import { partitionSidebarSessions } from "./lib/sidebar-sessions";
 import { clearSessionUnread, markBackgroundSessionUnread } from "./lib/session-attention";
@@ -159,6 +161,25 @@ interface QueuedPrompt {
   text: string;
   images: ChatImage[];
   annotations?: ChatAnnotation[];
+  mentions?: MentionRef[];
+}
+
+interface MentionMenuOption {
+  id: string;
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+  category?: MentionKind;
+  mention?: MentionRef;
+}
+
+function nextMentionOptionIndex(options: readonly MentionMenuOption[], current: number, direction: 1 | -1): number {
+  if (options.length === 0) return 0;
+  for (let offset = 1; offset <= options.length; offset += 1) {
+    const index = (current + direction * offset + options.length) % options.length;
+    if (!options[index]?.disabled) return index;
+  }
+  return current;
 }
 
 interface AnnotationSelection {
@@ -259,6 +280,12 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [draftAnnotations, setDraftAnnotations] = useState<ChatAnnotation[]>([]);
+  const [draftMentions, setDraftMentions] = useState<MentionRef[]>([]);
+  const [mentionMenu, setMentionMenu] = useState<{ category?: MentionKind; activeIndex: number }>();
+  const [mentionResults, setMentionResults] = useState<MentionSearchResult[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<SkillMentionRef[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionError, setMentionError] = useState<string>();
   const [annotationSelection, setAnnotationSelection] = useState<AnnotationSelection>();
   const [annotationCommentEditor, setAnnotationCommentEditor] = useState<AnnotationCommentEditor>();
   const [annotationCommentDraft, setAnnotationCommentDraft] = useState("");
@@ -302,6 +329,10 @@ export default function App() {
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+  const mentionRequestRef = useRef(0);
+  const skillRequestRef = useRef(0);
+  const mentionBlurTimerRef = useRef<number | undefined>(undefined);
   const annotationCommentInputRef = useRef<HTMLInputElement>(null);
   const annotationRangesRef = useRef(new Map<string, Range>());
   const sessionRenameInputRef = useRef<HTMLInputElement>(null);
@@ -323,6 +354,7 @@ export default function App() {
   const availableModelsRef = useRef<AgentSnapshot["models"]>([]);
   const newSessionModelIdRef = useRef<string | null>(null);
   const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
+  const sessionCommandsRef = useRef(new Map<string, AvailableCommand[]>());
   const runningSessionIdsRef = useRef(new Set<string>());
   const followUpQueuesRef = useRef(new Map<string, FollowUpItem<QueuedPrompt>[]>());
   const interruptingSessionIdsRef = useRef(new Set<string>());
@@ -334,6 +366,41 @@ export default function App() {
   const sidebarDragRef = useRef<SidebarDragSnapshot | undefined>(undefined);
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
   const activeFollowUps = activeSession ? followUpQueues.get(activeSession) ?? [] : [];
+  const mentionTrigger = findAtTrigger(draft, textareaRef.current?.selectionStart ?? draft.length);
+  const mentionQuery = mentionTrigger?.query ?? "";
+  const mentionOptions = useMemo<MentionMenuOption[]>(() => {
+    const query = mentionQuery.toLocaleLowerCase();
+    const skillOptions = rankSkillMentions(availableSkills, mentionQuery).map((mention) => ({
+      id: mention.id,
+      label: mention.label,
+      detail: [mention.description, mention.source].filter(Boolean).join(" · "),
+      mention,
+    } satisfies MentionMenuOption));
+    const workspaceOptions = mentionResults.map((result) => ({
+      id: `${result.kind}:${result.path}`,
+      label: result.label,
+      detail: result.detail,
+      mention: {
+        id: `${result.kind}:${result.path}`,
+        kind: result.kind,
+        path: result.path,
+        label: result.label,
+        ...(result.kind === "file" && result.size !== undefined ? { size: result.size } : {}),
+        ...(result.kind === "file" && result.sensitive ? { sensitive: true } : {}),
+      },
+    } satisfies MentionMenuOption));
+    if (!mentionMenu?.category && !query) {
+      const workspaceDetail = workspace ? undefined : t("mentions.selectProjectFirst");
+      return [
+        { id: "category:file", label: t("mentions.files"), detail: workspaceDetail ?? t("mentions.filesDescription"), category: "file", disabled: !workspace },
+        { id: "category:directory", label: t("mentions.directories"), detail: workspaceDetail ?? t("mentions.directoriesDescription"), category: "directory", disabled: !workspace },
+        { id: "category:skill", label: t("mentions.skills"), detail: t("mentions.skillsDescription"), category: "skill" },
+      ] satisfies MentionMenuOption[];
+    }
+    if (mentionMenu?.category === "skill") return skillOptions;
+    if (!mentionMenu?.category) return mergeRootMentionOptions(skillOptions, workspaceOptions, 100);
+    return workspaceOptions;
+  }, [availableSkills, mentionMenu?.category, mentionQuery, mentionResults, t, workspace]);
 
   const clearDraftAnnotations = useCallback(() => {
     annotationRangesRef.current.clear();
@@ -393,6 +460,72 @@ export default function App() {
   }, [availableModels]);
 
   useEffect(() => {
+    const rootQuery = !mentionMenu?.category && Boolean(mentionTrigger?.query);
+    if (!mentionMenu || mentionMenu.category === "skill" || (!mentionMenu.category && !rootQuery) || !workspace || !mentionTrigger) {
+      setMentionLoading(false);
+      setMentionResults([]);
+      setMentionError(undefined);
+      return;
+    }
+    const requestId = ++mentionRequestRef.current;
+    setMentionLoading(true);
+    setMentionError(undefined);
+    const timer = window.setTimeout(() => {
+      const kind = mentionMenu.category === "file" || mentionMenu.category === "directory"
+        ? mentionMenu.category
+        : "all";
+      void window.devinAgent.mentions.search({
+        workspacePath: workspace,
+        kind,
+        query: mentionTrigger.query,
+        limit: 100,
+      }).then((results) => {
+        if (requestId !== mentionRequestRef.current) return;
+        setMentionResults(results);
+      }).catch((error) => {
+        if (requestId !== mentionRequestRef.current) return;
+        setMentionResults([]);
+        setMentionError(cleanError(error instanceof Error ? error.message : String(error)));
+      }).finally(() => {
+        if (requestId === mentionRequestRef.current) setMentionLoading(false);
+      });
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+      mentionRequestRef.current += 1;
+    };
+  }, [mentionMenu?.category, mentionTrigger?.query, workspace]);
+
+  useEffect(() => {
+    setMentionMenu(undefined);
+    mentionRequestRef.current += 1;
+    const requestId = ++skillRequestRef.current;
+    void window.devinAgent.mentions.setWorkspace(workspace)
+      .then(() => window.devinAgent.mentions.skills({
+        ...(workspace ? { workspacePath: workspace } : {}),
+        ...(activeSession ? { sessionId: activeSession } : {}),
+      }))
+      .then((skills) => {
+        if (requestId === skillRequestRef.current) setAvailableSkills(skills);
+      })
+      .catch((error) => {
+        if (requestId !== skillRequestRef.current) return;
+        setAvailableSkills([]);
+        setMentionError(cleanError(error instanceof Error ? error.message : String(error)));
+      });
+  }, [activeSession, workspace]);
+
+  useEffect(() => {
+    if (!mentionMenu) return;
+    const active = mentionOptions[mentionMenu.activeIndex];
+    if (active && !active.disabled) return;
+    const nextIndex = mentionOptions.findIndex((option) => !option.disabled);
+    const normalizedIndex = Math.max(0, nextIndex);
+    if (mentionMenu.activeIndex === normalizedIndex) return;
+    setMentionMenu((current) => current ? { ...current, activeIndex: normalizedIndex } : current);
+  }, [mentionMenu?.activeIndex, mentionMenu?.category, mentionOptions]);
+
+  useEffect(() => {
     workspacesRef.current = workspaces;
   }, [workspaces]);
 
@@ -424,6 +557,8 @@ export default function App() {
     setSessionUnread(sessionId, false);
     activeSessionRef.current = sessionId;
     setActiveSessionState(sessionId);
+    setAvailableCommands(sessionId ? sessionCommandsRef.current.get(sessionId) ?? [] : []);
+    setMentionMenu(undefined);
   }, [setSessionUnread]);
 
   const markSessionRunning = useCallback((sessionId: string | undefined, value: boolean) => {
@@ -834,7 +969,10 @@ export default function App() {
       const normalized = normalizeAcpUpdate(event, typeof event.sessionId === "string" ? event.sessionId : "unknown-session");
       const normalizedSessionId = normalized.sessionId || eventSessionId;
       const isActiveUpdate = !normalizedSessionId || normalizedSessionId === activeSessionRef.current;
-      if (normalized.type === "commands" && isActiveUpdate) setAvailableCommands(normalized.commands);
+      if (normalized.type === "commands") {
+        if (normalizedSessionId) sessionCommandsRef.current.set(normalizedSessionId, normalized.commands);
+        if (isActiveUpdate) setAvailableCommands(normalized.commands);
+      }
       if (normalized.type === "mode" && isActiveUpdate) setPermission(normalized.modeId);
       if ((normalized.type === "config" || normalized.type === "config_options") && isActiveUpdate) {
         const updatedOptions = normalized.type === "config_options" ? normalized.options : [normalized.option];
@@ -1101,6 +1239,20 @@ export default function App() {
     const cwd = resolveNewTaskCwd(projectPath, homeDirectory);
     activeCwdRef.current = cwd;
     workspaceRef.current = projectPath;
+    const skillRequestId = ++skillRequestRef.current;
+    try {
+      await window.devinAgent.mentions.setWorkspace(projectPath);
+      const skills = await window.devinAgent.mentions.skills({
+        ...(projectPath ? { workspacePath: projectPath } : {}),
+        refresh: true,
+      });
+      if (skillRequestId === skillRequestRef.current) setAvailableSkills(skills);
+    } catch (error) {
+      if (skillRequestId === skillRequestRef.current) {
+        setAvailableSkills([]);
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+    }
     setWorkspace(projectPath);
     setMessages([]);
     selectActiveSession(undefined);
@@ -1292,11 +1444,13 @@ export default function App() {
     command: "prompt" | "follow_up" = "prompt",
   ) => {
     const annotations = prompt.annotations ?? [];
-    const displayText = prompt.text || (annotations.length > 0 ? t("annotation.defaultRequest") : t("composer.attachedImage"));
+    const displayText = prompt.text
+      || (prompt.mentions?.length ? prompt.mentions.map((mention) => `@${mention.label}`).join(" ") : "")
+      || (annotations.length > 0 ? t("annotation.defaultRequest") : t("composer.attachedImage"));
     followingConversationTailRef.current = targetSessionId === activeSessionRef.current;
     updateSessionMessages(targetSessionId, (current) => [
       ...current,
-      optimisticUserMessage(displayText, false, prompt.images, annotations),
+      optimisticUserMessage(displayText, false, prompt.images, annotations, prompt.mentions ?? []),
     ]);
     const sentAt = new Date().toISOString();
     setSessions((current) => {
@@ -1330,6 +1484,7 @@ export default function App() {
           ? formatPromptWithAnnotations(prompt.text || t("annotation.defaultRequest"), annotations)
           : prompt.text || t("composer.describeImage"),
         ...(prompt.images.length ? { images: prompt.images.map((image) => ({ type: "image", ...image })) } : {}),
+        ...(prompt.mentions?.length ? { mentions: prompt.mentions } : {}),
       });
     } catch (error) {
       markSessionRunning(targetSessionId, false);
@@ -1420,13 +1575,14 @@ export default function App() {
   const sendMessage = async ({ interrupt = false }: { interrupt?: boolean } = {}) => {
     if (sessionLocked) return;
     const text = draft.trim();
-    if (!text && attachments.length === 0 && draftAnnotations.length === 0) return;
+    if (!text && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0) return;
     if (attachments.length > 0 && !imagePromptEnabled) {
       setToast({ message: t("composer.imagesUnavailable"), type: "error" });
       return;
     }
     const pendingAttachments = attachments;
     const pendingAnnotations = draftAnnotations;
+    const pendingMentions = draftMentions;
     const pendingAnnotationRanges = new Map(pendingAnnotations.flatMap((annotation) => {
       const range = annotationRangesRef.current.get(annotation.id);
       return range ? [[annotation.id, range] as const] : [];
@@ -1470,12 +1626,15 @@ export default function App() {
       text,
       images: pendingAttachments.map(({ data, mimeType }) => ({ data, mimeType })),
       ...(pendingAnnotations.length > 0 ? { annotations: pendingAnnotations } : {}),
+      ...(pendingMentions.length > 0 ? { mentions: pendingMentions } : {}),
     };
     const alreadyRunning = runningSessionIdsRef.current.has(targetSessionId)
       || interruptingSessionIdsRef.current.has(targetSessionId);
     followingConversationTailRef.current = true;
     setDraft("");
     setAttachments([]);
+    setDraftMentions([]);
+    setMentionMenu(undefined);
     clearDraftAnnotations();
     if (alreadyRunning && !interrupt) {
       setFollowUpQueue(targetSessionId, (queue) => enqueueFollowUp(queue, prompt));
@@ -1487,6 +1646,7 @@ export default function App() {
     } catch (error) {
       setDraft((current) => current || text);
       setAttachments((current) => current.length > 0 ? current : pendingAttachments);
+      setDraftMentions((current) => current.length > 0 ? current : pendingMentions);
       setDraftAnnotations((current) => {
         if (current.length > 0) return current;
         annotationRangesRef.current = new Map(pendingAnnotationRanges);
@@ -1541,7 +1701,78 @@ export default function App() {
     }
   };
 
+  const selectMentionOption = (option: MentionMenuOption | undefined) => {
+    if (!option || option.disabled || !mentionTrigger) return;
+    if (mentionBlurTimerRef.current !== undefined) {
+      window.clearTimeout(mentionBlurTimerRef.current);
+      mentionBlurTimerRef.current = undefined;
+    }
+    const caret = textareaRef.current?.selectionStart ?? draft.length;
+    if (option.category) {
+      const nextDraft = `${draft.slice(0, mentionTrigger.start)}@${draft.slice(caret)}`;
+      setDraft(nextDraft);
+      setMentionMenu({ category: option.category, activeIndex: 0 });
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(mentionTrigger.start + 1, mentionTrigger.start + 1);
+      });
+      return;
+    }
+    if (!option.mention) return;
+    if (option.mention.kind === "file" && option.mention.sensitive && !window.confirm(t("mentions.sensitiveConfirm", { path: option.mention.path }))) return;
+    const nextDraft = removeAtTrigger(draft, mentionTrigger, caret);
+    setDraft(nextDraft);
+    setDraftMentions((current) => addMention(current, option.mention!));
+    setMentionMenu(undefined);
+    setMentionResults([]);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const handleDraftChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value;
+    const caret = event.target.selectionStart;
+    setDraft(value);
+    if (composingRef.current) return;
+    const trigger = findAtTrigger(value, caret);
+    if (!trigger) {
+      setMentionMenu(undefined);
+      return;
+    }
+    setMentionMenu((current) => current ? { ...current, activeIndex: 0 } : { activeIndex: 0 });
+  };
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionMenu && !event.nativeEvent.isComposing) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setMentionMenu((current) => current ? {
+          ...current,
+          activeIndex: nextMentionOptionIndex(mentionOptions, current.activeIndex, direction),
+        } : current);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        selectMentionOption(mentionOptions[mentionMenu.activeIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionMenu(undefined);
+        return;
+      }
+      if (event.key === "Backspace" && mentionMenu.category && mentionTrigger?.query === "") {
+        event.preventDefault();
+        setMentionMenu({ activeIndex: 0 });
+        return;
+      }
+    }
+    if (event.key === "Backspace" && !draft && draftMentions.length > 0) {
+      event.preventDefault();
+      setDraftMentions((current) => current.slice(0, -1));
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void sendMessage({ interrupt: event.metaKey || event.ctrlKey });
@@ -2424,6 +2655,21 @@ export default function App() {
                   </div>
                 )}
                 <div className={`composer ${running ? "composer-running" : ""}`}>
+                  {draftMentions.length > 0 && (
+                    <div className="mention-token-list" aria-label={t("mentions.attached")}>
+                      {draftMentions.map((mention) => (
+                        <span className={`mention-token mention-${mention.kind}`} key={mention.id}>
+                          {mention.kind === "file" ? <FileIcon size={13} /> : mention.kind === "directory" ? <Folder size={13} /> : <Sparkles size={13} />}
+                          <span>@{mention.label}{mention.kind === "directory" ? "/" : ""}</span>
+                          <button
+                            type="button"
+                            onClick={() => setDraftMentions((current) => current.filter((item) => item.id !== mention.id))}
+                            aria-label={t("mentions.remove", { label: mention.label })}
+                          ><X size={12} /></button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {draftAnnotations.length > 0 && (
                     <div className="annotation-chip-wrap">
                       <div className="annotation-preview" role="tooltip">
@@ -2471,13 +2717,68 @@ export default function App() {
                   <textarea
                     ref={textareaRef}
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={handleDraftChange}
                     onKeyDown={handleComposerKeyDown}
                     onPaste={handleComposerPaste}
+                    onCompositionStart={() => { composingRef.current = true; }}
+                    onCompositionEnd={(event) => {
+                      composingRef.current = false;
+                      const trigger = findAtTrigger(event.currentTarget.value, event.currentTarget.selectionStart);
+                      setMentionMenu((current) => trigger ? { ...current, activeIndex: 0 } : undefined);
+                    }}
+                    onBlur={() => {
+                      if (mentionBlurTimerRef.current !== undefined) window.clearTimeout(mentionBlurTimerRef.current);
+                      mentionBlurTimerRef.current = window.setTimeout(() => {
+                        setMentionMenu(undefined);
+                        mentionBlurTimerRef.current = undefined;
+                      }, 100);
+                    }}
+                    aria-autocomplete="list"
+                    aria-expanded={Boolean(mentionMenu)}
+                    aria-controls={mentionMenu ? "composer-mention-listbox" : undefined}
+                    aria-activedescendant={mentionMenu && mentionOptions[mentionMenu.activeIndex] ? `mention-option-${mentionOptions[mentionMenu.activeIndex]!.id}` : undefined}
                     placeholder={sessionLocked ? "This Devin session is locked and read-only." : running ? t("composer.runningPrompt") : t("composer.prompt")}
                     disabled={sessionLocked}
                     rows={1}
                   />
+                  {mentionMenu && mentionTrigger && (
+                    <div className="mention-menu" role="dialog" aria-label={t("mentions.menu")}>
+                      {mentionMenu.category && (
+                        <button
+                          type="button"
+                          className="mention-menu-back"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setMentionMenu({ activeIndex: 0 })}
+                        >← {mentionMenu.category === "file" ? t("mentions.files") : mentionMenu.category === "directory" ? t("mentions.directories") : t("mentions.skills")}</button>
+                      )}
+                      <div id="composer-mention-listbox" className="mention-menu-list" role="listbox">
+                        {mentionLoading && <div className="mention-menu-state"><LoaderCircle className="spin" size={14} />{t("mentions.loading")}</div>}
+                        {!mentionLoading && mentionError && <div className="mention-menu-state error">{mentionError}</div>}
+                        {!mentionLoading && !mentionError && mentionOptions.length === 0 && <div className="mention-menu-state">{t("mentions.empty")}</div>}
+                        {!mentionLoading && !mentionError && mentionOptions.map((option, index) => (
+                          <button
+                            type="button"
+                            id={`mention-option-${option.id}`}
+                            role="option"
+                            aria-selected={index === mentionMenu.activeIndex}
+                            aria-disabled={option.disabled || undefined}
+                            disabled={option.disabled}
+                            className={index === mentionMenu.activeIndex ? "active" : ""}
+                            key={option.id}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => setMentionMenu((current) => current ? { ...current, activeIndex: index } : current)}
+                            onClick={() => selectMentionOption(option)}
+                          >
+                            <span className="mention-menu-icon">
+                              {(option.category ?? option.mention?.kind) === "file" ? <FileIcon size={16} /> : (option.category ?? option.mention?.kind) === "directory" ? <Folder size={16} /> : <Sparkles size={16} />}
+                            </span>
+                            <span className="mention-menu-copy"><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
+                            {option.category && <ChevronRight size={15} />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="composer-toolbar">
                     <div className="composer-tools">
                       {imagePromptEnabled && !sessionLocked && (
@@ -2501,11 +2802,11 @@ export default function App() {
                       />
                       <button
                         className={`send-button ${running ? "stop-button" : ""}`}
-                        onClick={() => running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 ? void stopAgent() : void sendMessage()}
-                        disabled={sessionLocked || (!running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0)}
+                        onClick={() => running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0 ? void stopAgent() : void sendMessage()}
+                        disabled={sessionLocked || (!running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0)}
                         aria-label={running ? t("composer.sendOrStop") : t("composer.send")}
                       >
-                        {running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 ? <CircleStop size={17} /> : <ArrowUp size={17} />}
+                        {running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0 ? <CircleStop size={17} /> : <ArrowUp size={17} />}
                       </button>
                     </div>
                   </div>
@@ -2925,6 +3226,16 @@ function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(i
   const { t } = useI18n();
   return (
     <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
+      {message.mentions && message.mentions.length > 0 && (
+        <div className="message-mention-list" aria-label={t("mentions.attached")}>
+          {message.mentions.map((mention) => (
+            <span className={`message-mention mention-${mention.kind}`} key={mention.id}>
+              {mention.kind === "file" ? <FileIcon size={12} /> : mention.kind === "directory" ? <Folder size={12} /> : <Sparkles size={12} />}
+              @{mention.label}{mention.kind === "directory" ? "/" : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {message.annotations && message.annotations.length > 0 && (
         <details className="user-annotation-context">
           <summary><MessageSquareQuote size={13} />{t("annotation.count", { count: message.annotations.length })}</summary>
@@ -3102,6 +3413,7 @@ function FollowUpQueue({
               ) : (
                 <div className="follow-up-copy">
                   <span>{item.value.text || (item.value.annotations?.length ? t("annotation.defaultRequest") : t("composer.attachedImage"))}</span>
+                  {item.value.mentions && item.value.mentions.length > 0 && <small>{item.value.mentions.map((mention) => `@${mention.label}${mention.kind === "directory" ? "/" : ""}`).join(" · ")}</small>}
                   {item.value.annotations && item.value.annotations.length > 0 && <small>{t("annotation.count", { count: item.value.annotations.length })}</small>}
                   {item.value.images.length > 0 && <small>{t("queue.images", { count: item.value.images.length })}</small>}
                 </div>

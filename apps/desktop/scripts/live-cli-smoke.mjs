@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,7 @@ const cwd = await mkdtemp(path.join(os.tmpdir(), "devin-agent-live-"));
 const updateKinds = new Set();
 let permissionRequests = 0;
 const promptResults = [];
+const mentionResults = [];
 let createdSession;
 let firstHost;
 let recoveryHost;
@@ -56,6 +57,28 @@ try {
   ]);
   promptResults.push(imageResult.stopReason ?? "unknown");
 
+  const mentionDirectory = path.join(cwd, "docs");
+  const mentionFile = path.join(mentionDirectory, "context.txt");
+  await mkdir(mentionDirectory, { recursive: true });
+  await writeFile(mentionFile, "DEVIN_AGENT_MENTION_SMOKE\n", "utf8");
+  const fileUri = pathToFileURL(mentionFile).href;
+  const directoryUri = pathToFileURL(mentionDirectory).href;
+  const embeddedResult = await firstHost.prompt([
+    { type: "text", text: "Reply with OK only. Do not run tools or modify files. This prompt verifies an embedded local resource." },
+    { type: "resource", resource: { uri: fileUri, mimeType: "text/plain", text: "DEVIN_AGENT_MENTION_SMOKE\n" } },
+  ]);
+  mentionResults.push({ kind: "embedded-file", stopReason: embeddedResult.stopReason ?? "unknown" });
+  const linkedFileResult = await firstHost.prompt([
+    { type: "text", text: "Reply with OK only. Do not run tools or modify files. This prompt verifies a local file ResourceLink." },
+    { type: "resource_link", uri: fileUri, name: "@docs/context.txt", mimeType: "text/plain" },
+  ]);
+  mentionResults.push({ kind: "linked-file", stopReason: linkedFileResult.stopReason ?? "unknown" });
+  const linkedDirectoryResult = await firstHost.prompt([
+    { type: "text", text: "Reply with OK only. Do not run tools or modify files. This prompt verifies a non-recursive directory ResourceLink." },
+    { type: "resource_link", uri: directoryUri, name: "@docs/", description: "Workspace directory (not recursively embedded)" },
+  ]);
+  mentionResults.push({ kind: "linked-directory", stopReason: linkedDirectoryResult.stopReason ?? "unknown" });
+
   const permissionMode = availableModes.find((mode) => mode && typeof mode === "object" && mode.id === "accept-edits");
   if (permissionMode) {
     await firstHost.setMode("accept-edits");
@@ -82,6 +105,7 @@ try {
     modeWrite: Boolean(currentMode),
     modelWrite: Boolean(imageModelOption?.value),
     permissionRequests,
+    mentionResults,
     promptResults,
     recovered,
     updateKinds: [...updateKinds].sort(),

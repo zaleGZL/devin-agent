@@ -20,8 +20,19 @@ Devin Coding Agent 是一个原生桌面客户端，通过 [Agent Client Protoco
 - 工作区管理，支持多个 Devin session
 - 流式对话，包含 reasoning、plan 和工具活动
 - 图片输入、动态模型与模式、权限请求
+- 支持通过 `@` 引用项目文件、目录，以及缓存的全局/项目 Skills
 - 文件预览、主题、语言切换和命令面板
 - 所有能力通过 ACP 运行时协商，不硬编码
+
+### 输入框 `@` 引用
+
+在输入框键入 `@` 可引用**文件**、**目录**或 **Skills**。文件和目录仅在选择项目后可用；
+应用不会把用户主目录作为兜底扫描范围。只有 Devin 声明支持 ACP embedded context 时，
+应用才会内联不超过 512 KiB 的 UTF-8 文件；二进制文件、超大文件或不支持内联的文件会降级为
+resource link。目录始终只作为链接发送，不递归展开。Skill metadata 来自 Devin 支持的全局与项目
+`SKILL.md` 目录，同名时项目 Skill 覆盖全局 Skill；每个新 session 保存独立的不可变快照。
+选中 Skill 后发送 Devin 文档定义的 `@skills:<name>`，加载和执行正文的仍是 Devin CLI，Desktop
+不读取正文或执行 Skill。
 
 ## 前置条件
 
@@ -73,7 +84,29 @@ pnpm pack:mac           # 构建未签名 Apple Silicon DMG，复制到 Download
 3. 运行 `pnpm publish:desktop` —— 自动打 `desktop-v<version>` tag 并 push，CI 构建后
    将安装包发布到 GitHub Releases。
 
-安装包当前**未签名**。macOS 用户需右键 → 打开来绕过 Gatekeeper；Windows 会显示 SmartScreen 警告。
+安装包当前**未签名且未经过 Apple 公证**。Windows 会显示 SmartScreen 警告；macOS 请按以下步骤安装。
+
+### 安装未签名的 macOS 包
+
+Gatekeeper 可能提示“无法验证开发者”或“Apple 无法检查其是否包含恶意软件”。仅对从本项目
+[GitHub Releases 官方页面](https://github.com/zaleGZL/devin-agent/releases)下载的 DMG 执行以下放行操作。
+
+1. 下载与机器匹配的 DMG（Apple Silicon 使用 `arm64`，Intel 使用 `x64`），打开后将
+   **Devin Agent** 拖入**应用程序**目录。
+2. 先尝试打开一次已安装的应用，再进入**系统设置 → 隐私与安全性**，滚动到**安全性**，
+   点击**仍要打开**，完成身份验证后确认**打开**。参见
+   [Apple 的 Gatekeeper 说明](https://support.apple.com/zh-cn/102445)。
+3. 如果确认下载来源可信、重新下载后仍提示“已损坏”或无法打开，仅移除该应用的隔离属性，
+   然后启动应用：
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Devin Agent.app"
+   open "/Applications/Devin Agent.app"
+   ```
+
+   如果第一条命令提示权限不足，在该命令前加 `sudo` 后重试。
+
+不要全局关闭 Gatekeeper。移除隔离属性会绕过一项 macOS 安全检查，执行命令前必须确认下载来源。
 
 ## 平台说明
 

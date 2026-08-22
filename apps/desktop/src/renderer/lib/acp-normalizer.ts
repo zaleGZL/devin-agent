@@ -10,6 +10,7 @@ import type {
   ToolStatus,
   UsageState,
 } from "../../shared/conversation";
+import type { MentionRef } from "../../shared/mentions";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -43,7 +44,8 @@ export function normalizeAcpUpdate(
       const content = contentValue(update.content ?? update.message);
       const text = extractText(content);
       const images = extractImages(content);
-      if (!text && images.length === 0) return unknownEvent(sessionId, updateId, timestamp, kind, update, "消息 chunk 不包含可显示内容");
+      const mentions = extractMentions(content);
+      if (!text && images.length === 0 && mentions.length === 0) return unknownEvent(sessionId, updateId, timestamp, kind, update, "消息 chunk 不包含可显示内容");
       return {
         type: "message_chunk",
         sessionId,
@@ -51,6 +53,7 @@ export function normalizeAcpUpdate(
         text,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
         ...(images.length > 0 ? { images } : {}),
+        ...(mentions.length > 0 ? { mentions } : {}),
         ...(phase(update) ? { phase: phase(update) } : {}),
         timestamp,
       };
@@ -233,6 +236,51 @@ function extractImages(value: unknown): ChatImage[] {
   });
 }
 
+function extractMentions(value: unknown): MentionRef[] {
+  const parts = Array.isArray(value) ? value : [value];
+  return parts.flatMap<MentionRef>((part, index) => {
+    if (!isRecord(part)) return [];
+    if (part.type === "resource_link" && typeof part.uri === "string") {
+      const rawName = typeof part.name === "string" ? part.name : resourceBasename(part.uri);
+      const directory = rawName.endsWith("/");
+      const mentionPath = rawName.replace(/^@/, "").replace(/\/$/, "");
+      if (!mentionPath) return [];
+      return directory
+        ? [{ id: `chunk-directory-${index}-${mentionPath}`, kind: "directory", path: mentionPath, label: mentionPath }]
+        : [{
+            id: `chunk-file-${index}-${mentionPath}`,
+            kind: "file",
+            path: mentionPath,
+            label: mentionPath,
+            ...(typeof part.size === "number" ? { size: part.size } : {}),
+            ...(typeof part.mimeType === "string" ? { mimeType: part.mimeType } : {}),
+          }];
+    }
+    if (part.type === "resource" && isRecord(part.resource) && typeof part.resource.uri === "string") {
+      const mentionPath = resourceBasename(part.resource.uri);
+      if (!mentionPath) return [];
+      return [{
+        id: `chunk-file-${index}-${mentionPath}`,
+        kind: "file",
+        path: mentionPath,
+        label: mentionPath,
+        ...(typeof part.resource.mimeType === "string" ? { mimeType: part.resource.mimeType } : {}),
+      }];
+    }
+    return [];
+  });
+}
+
+function resourceBasename(uri: string): string {
+  try {
+    const pathname = decodeURIComponent(new URL(uri).pathname).replace(/\/$/, "");
+    return pathname.slice(pathname.lastIndexOf("/") + 1);
+  } catch {
+    const value = uri.replace(/\/$/, "");
+    return value.slice(value.lastIndexOf("/") + 1);
+  }
+}
+
 function phase(update: JsonRecord): "start" | "update" | "end" | undefined {
   const value = stringValue(update.phase ?? update.status);
   if (value === "start" || value === "started") return "start";
@@ -263,7 +311,15 @@ function normalizeCommands(value: unknown): AvailableCommand[] {
     if (typeof entry === "string") return entry.trim() ? [{ name: entry.trim() }] : [];
     if (!isRecord(entry)) return [];
     const name = stringValue(entry.name ?? entry.command).trim();
-    return name ? [{ name, ...(stringValue(entry.description) ? { description: stringValue(entry.description) } : {}), ...(has(entry, "input") ? { input: entry.input } : {}) }] : [];
+    const meta = isRecord(entry._meta) ? entry._meta : undefined;
+    const category = stringValue(entry.category ?? meta?.["cognition.ai/category"]).trim();
+    return name ? [{
+      name,
+      ...(stringValue(entry.description) ? { description: stringValue(entry.description) } : {}),
+      ...(has(entry, "input") ? { input: entry.input } : {}),
+      ...(category ? { category } : {}),
+      raw: entry,
+    }] : [];
   });
 }
 

@@ -15,6 +15,7 @@ import type {
 } from "../../shared/conversation";
 import { toRawDiagnostic } from "./acp-normalizer";
 import { parsePromptAnnotations } from "./annotations";
+import type { MentionRef } from "../../shared/mentions";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -175,7 +176,7 @@ export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent | Leg
   return reduceConversation(createConversationState(event.sessionId, messages), event).messages;
 }
 
-export function optimisticUserMessage(text: string, queued = false, images: ChatImage[] = [], annotations: ChatAnnotation[] = []): ChatMessage {
+export function optimisticUserMessage(text: string, queued = false, images: ChatImage[] = [], annotations: ChatAnnotation[] = [], mentions: MentionRef[] = []): ChatMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role: "user",
@@ -184,6 +185,7 @@ export function optimisticUserMessage(text: string, queued = false, images: Chat
     ...(queued ? { queued: true } : {}),
     images,
     ...(annotations.length > 0 ? { annotations } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
     tools: [],
     work: text ? [{ type: "text", id: "text-0", text }] : [],
   };
@@ -205,7 +207,7 @@ function applyMessageChunk(messages: ChatMessage[], event: Extract<AgentEvent, {
   if (event.role === "user") {
     const parsed = parsePromptAnnotations(incomingText);
     const last = messages.at(-1);
-    if (last?.role === "user" && (last.text === parsed.text || event.messageId === last.id)) {
+    if (last?.role === "user" && (last.text === parsed.text || event.messageId === last.id || (!parsed.text && (event.mentions?.length ?? 0) > 0))) {
       return messages.map((message, index) => index === messages.length - 1 ? {
         ...message,
         text: parsed.text || message.text,
@@ -213,6 +215,7 @@ function applyMessageChunk(messages: ChatMessage[], event: Extract<AgentEvent, {
         queued: false,
         timestamp: event.timestamp ?? message.timestamp,
         images: event.images && event.images.length > 0 ? event.images : message.images,
+        mentions: mergeMentions(message.mentions, event.mentions),
       } : message);
     }
     return [...messages, makeMessage(event.role, incomingText, event)];
@@ -318,7 +321,7 @@ function applyThoughtChunk(messages: ChatMessage[], event: Extract<AgentEvent, {
   });
 }
 
-function makeMessage(role: "user" | "assistant", text: string, event: { messageId?: string; timestamp?: number; images?: ChatImage[]; phase?: string }, streaming = false): ChatMessage {
+function makeMessage(role: "user" | "assistant", text: string, event: { messageId?: string; timestamp?: number; images?: ChatImage[]; mentions?: MentionRef[]; phase?: string }, streaming = false): ChatMessage {
   const id = event.messageId ?? `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const parsed = role === "user" ? parsePromptAnnotations(text) : { text, annotations: [] };
   return {
@@ -329,9 +332,17 @@ function makeMessage(role: "user" | "assistant", text: string, event: { messageI
     ...(role === "assistant" ? { streaming } : {}),
     ...(parsed.annotations.length > 0 ? { annotations: parsed.annotations } : {}),
     ...(event.images ? { images: event.images } : { images: [] }),
+    ...(event.mentions && event.mentions.length > 0 ? { mentions: event.mentions } : {}),
     tools: [],
     work: parsed.text ? [{ type: "text", id: `text-${id}`, text: parsed.text }] : [],
   };
+}
+
+function mergeMentions(current: readonly MentionRef[] | undefined, incoming: readonly MentionRef[] | undefined): MentionRef[] | undefined {
+  if (!incoming || incoming.length === 0) return current ? [...current] : undefined;
+  const merged = new Map((current ?? []).map((mention) => [mention.id, mention]));
+  for (const mention of incoming) merged.set(mention.id, mention);
+  return [...merged.values()];
 }
 
 function makeThoughtMessage(event: Extract<AgentEvent, { type: "thought_chunk" }>): ChatMessage {
@@ -406,6 +417,7 @@ function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefin
   const text = parsed.text;
   const thinking = getThinking(content);
   const images = getImages(content);
+  const mentions = getMentions(content);
   const timestamp = normalizeTimestamp(value.timestamp);
   const tools = getTools(content, timestamp);
   const work = value.role === "assistant" ? getWork(content) : text ? [{ type: "text" as const, id: `text-${id}`, text }] : [];
@@ -415,11 +427,42 @@ function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefin
     text,
     ...(parsed.annotations.length > 0 ? { annotations: parsed.annotations } : {}),
     images,
+    ...(mentions.length > 0 ? { mentions } : {}),
     ...(thinking ? { thinking } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     tools,
     work,
   };
+}
+
+function getMentions(content: unknown): MentionRef[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap<MentionRef>((part, index) => {
+    if (!isRecord(part)) return [];
+    if (part.type === "resource_link" && typeof part.uri === "string") {
+      const name = typeof part.name === "string" ? part.name : decodeResourceName(part.uri);
+      const directory = name.endsWith("/");
+      const relativePath = name.replace(/^@/, "").replace(/\/$/, "");
+      if (!relativePath) return [];
+      return directory
+        ? [{ id: `history-directory-${index}-${relativePath}`, kind: "directory", label: relativePath, path: relativePath }]
+        : [{ id: `history-file-${index}-${relativePath}`, kind: "file", label: relativePath, path: relativePath, ...(typeof part.size === "number" ? { size: part.size } : {}), ...(typeof part.mimeType === "string" ? { mimeType: part.mimeType } : {}) }];
+    }
+    if (part.type === "resource" && isRecord(part.resource) && typeof part.resource.uri === "string") {
+      const relativePath = decodeResourceName(part.resource.uri);
+      if (!relativePath) return [];
+      return [{ id: `history-file-${index}-${relativePath}`, kind: "file", label: relativePath, path: relativePath, ...(typeof part.resource.mimeType === "string" ? { mimeType: part.resource.mimeType } : {}) }];
+    }
+    return [];
+  });
+}
+
+function decodeResourceName(uri: string): string {
+  try {
+    return decodeURIComponent(new URL(uri).pathname).replace(/^.*\//, "");
+  } catch {
+    return uri.replace(/^.*\//, "");
+  }
 }
 
 function getImages(content: unknown): ChatImage[] {

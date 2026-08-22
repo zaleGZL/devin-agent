@@ -266,7 +266,15 @@ function normalizeCommands(value: unknown): AvailableCommand[] {
     if (typeof entry === "string") return [{ name: entry }];
     if (!isRecord(entry)) return [];
     const name = stringValue(entry.name ?? entry.command).trim();
-    return name ? [{ name, ...(stringValue(entry.description) ? { description: stringValue(entry.description) } : {}), ...(Object.prototype.hasOwnProperty.call(entry, "input") ? { input: entry.input } : {}) }] : [];
+    const meta = isRecord(entry._meta) ? entry._meta : undefined;
+    const category = stringValue(entry.category ?? meta?.["cognition.ai/category"]).trim();
+    return name ? [{
+      name,
+      ...(stringValue(entry.description) ? { description: stringValue(entry.description) } : {}),
+      ...(Object.prototype.hasOwnProperty.call(entry, "input") ? { input: entry.input } : {}),
+      ...(category ? { category } : {}),
+      raw: entry,
+    }] : [];
   });
 }
 
