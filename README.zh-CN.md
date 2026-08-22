@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/desktop/src/renderer/assets/devin-agent-logo.png" width="180" alt="Devin Coding Agent">
+  <img src="assets/devin-agent-banner.png" width="960" alt="Devin Coding Agent——由 Devin CLI 驱动的开源桌面 Agent">
 </p>
 
 <h1 align="center">Devin Coding Agent</h1>
@@ -14,6 +14,12 @@
 
 Devin Coding Agent 是一个原生桌面客户端，通过 [Agent Client Protocol (ACP)](https://docs.devin.ai/cli/)
 连接到 Devin CLI。应用不捆绑或重新分发 Devin CLI 二进制文件——你自行安装并认证 CLI，应用通过 ACP 驱动它。
+
+## 应用预览
+
+<p align="center">
+  <img src="assets/devin-agent-desktop.jpeg" width="1200" alt="Devin Coding Agent 桌面应用">
+</p>
 
 ## 下载
 
