@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
@@ -80,7 +80,7 @@ jobs:
       - name: Package unsigned verification artifacts
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never
+        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish onTagOrDraft
       - name: Smoke test packaged application
         if: runner.os != 'Linux'
         run: pnpm --dir apps/desktop smoke:packaged

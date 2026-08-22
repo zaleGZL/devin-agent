@@ -1,57 +1,93 @@
-# Devin CLI 知识库索引
+# AGENTS.md
 
-本仓库 `docs/devin-cli/` 目录下存放了 Devin CLI 官方文档的本地镜像（来源：https://docs.devin.ai/cli/）。
-当用户询问 Devin CLI 相关问题时，请优先查阅本地镜像中对应的文档，再作答。
+Devin Coding Agent — a desktop-only local coding agent.
+The sole agent runtime is the user's locally installed Devin CLI, connected via the ACP protocol.
+This file is a navigation map for the repository, not an encyclopedia. Drill down on demand; do not read every link up front.
 
-## 路由索引
+## Quick commands
 
-按主题分类，路径均相对于 `docs/devin-cli/`。
+```bash
+pnpm install              # install dependencies
+pnpm dev                  # start dev (Vite + Electron)
+pnpm check                # typecheck + lint + test + build
+pnpm check:independence   # ensure no DSCode checkout / @thinkany/dscode-* references
+pnpm pack                 # local pack (unsigned)
+pnpm publish:desktop      # read version from apps/desktop/package.json → tag → push → CI publishes Release
+```
 
-### 入门与核心使用
+Real ACP smoke test (requires an authenticated Devin CLI):
 
-- [Quickstart](docs/devin-cli/index.md): 2 分钟上手 Devin CLI（本地命令行编码 agent，深度集成 Devin Cloud）
-- [Essential Commands](docs/devin-cli/essential-commands.md): 最常用的命令速查
-- [Subagents](docs/devin-cli/subagents.md): 将任务委派给前台/后台独立 subagent
-- [Hand off to cloud Devins](docs/devin-cli/handoff.md): 用 `/handoff` 把任务从 CLI 交给云端 Devin 会话
-- [Models](docs/devin-cli/models.md): 可用模型及配置方式
-- [Adaptive](docs/devin-cli/adaptive.md): Cognition 的智能模型路由器，自动为每个任务选择最佳模型
-- [Sandbox](docs/devin-cli/sandbox.md): Devin CLI 会话的 OS 级隔离、网络过滤与企业强制策略
-- [Troubleshooting](docs/devin-cli/troubleshooting.md): 常见问题与修复方法
+```bash
+DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
+```
 
-### IDE 集成 (ACP)
+## Architecture map
 
-- [JetBrains](docs/devin-cli/acp/jetbrains.md): 在 JetBrains IDE 的 AI Chat 中通过 ACP 运行 Devin（含 Remote Development）
-- [Zed](docs/devin-cli/acp/zed.md): 在 Zed 编辑器 Agent Panel 中作为自定义 ACP agent 运行
-- [Xcode](docs/devin-cli/acp/xcode.md): 在 Xcode 编码助手中通过 ACP 运行，或通过 Xcode MCP bridge 接入项目
+```
+apps/desktop/src/
+  main/       Electron main process: owns Devin subprocess, filesystem, native capabilities
+  preload/    IPC bridge (validated; renderer has no Node access)
+  renderer/   React UI (App.tsx main view + lib/ modules + styles.css)
+  shared/     types and capability definitions shared between main and renderer
+```
 
-### 可扩展性 (Extensibility)
+Key module entry points:
 
-- [Extensibility Overview](docs/devin-cli/extensibility/index.md): 用 rules、skills、MCP servers 定制扩展 Devin CLI
-- [Configuration](docs/devin-cli/extensibility/configuration.md): 用配置文件控制 Devin CLI 行为
-- [Rules & AGENTS.md](docs/devin-cli/extensibility/rules.md): 提供始终生效的指令与上下文，引导每次会话
-- [MCP Overview](docs/devin-cli/extensibility/mcp/overview.md): 用 Model Context Protocol 接入外部工具服务器
-- [MCP Configuration](docs/devin-cli/extensibility/mcp/configuration.md): 添加、配置、管理 MCP 服务器
-- [Skills Overview](docs/devin-cli/extensibility/skills/overview.md): 创建可复用的 prompt 与工作流扩展 agent 能力
-- [Creating Skills](docs/devin-cli/extensibility/skills/creating-skills.md): `SKILL.md` 格式与 frontmatter 选项完整参考
-- [Plugins](docs/devin-cli/extensibility/plugins/overview.md): 跨 Devin 云会话、CLI、Desktop 的插件安装、编写与治理
-- [Quickstart: team marketplace](docs/devin-cli/extensibility/plugins/quickstart.md): 为团队搭建共享插件市场（skills/rules/hooks/MCP/治理）
-- [Hooks](docs/devin-cli/extensibility/hooks/overview.md): 在会话特定事件触发时运行自定义逻辑
-- [Lifecycle Hooks](docs/devin-cli/extensibility/hooks/lifecycle-hooks.md): 各生命周期事件的触发时机与可用数据
+- `main/devin-acp-host.ts` — ACP host logic; manages Devin subprocess lifecycle
+- `main/acp-transport.ts` — ACP JSON-RPC transport layer
+- `main/devin-discovery.ts` — discover and validate the local `devin` binary
+- `main/devin-update.ts` — delegate to official `devin update`; never self-download
+- `main/git-changes.ts` — workspace git status
+- `renderer/App.tsx` — main UI (single file)
+- `renderer/lib/acp-normalizer.ts` — ACP event normalization
+- `renderer/lib/conversation.ts` — conversation state management
+- `shared/acp-types.ts` — ACP protocol types
+- `shared/capabilities.ts` — dynamic capability negotiation
 
-### 企业版 (Enterprise)
+## Mandatory rules
 
-- [Devin Auth](docs/devin-cli/enterprise/devin-auth.md): 用现有 Devin 账号认证 Devin CLI
-- [Legacy Windsurf Auth](docs/devin-cli/enterprise/windsurf-auth.md): 用旧版 Windsurf 企业账号认证
-- [Team Settings](docs/devin-cli/enterprise/team-settings.md): 配置团队级设置控制用户的 Devin CLI 使用
-- [System Configuration](docs/devin-cli/enterprise/system-config.md): 用 MDM 下发的 `system.json` 策略固定登录与代理设置
-- [Controls](docs/devin-cli/enterprise/controls.md): Devin CLI 作为本地 agent 与 Cascade 的功能/控制差异
+These rules always apply. Violating them causes CI failures or runtime errors.
 
-### 参考手册 (Reference)
+1. **No DSCode references.** If your change touches dependencies, imports, or paths, run `pnpm check:independence`.
+   No `@thinkany/dscode-*`, DSCode checkout paths, or `DSCODE_*` env vars.
 
-- [Commands & Flags](docs/devin-cli/reference/commands.md): 命令参数、子命令、交互式斜杠命令完整参考
-- [Keyboard Shortcuts](docs/devin-cli/reference/keyboard-shortcuts.md): Devin CLI 常用快捷键
-- [Terminal Compatibility](docs/devin-cli/reference/terminal-compatibility.md): 支持的终端与推荐
-- [Configuration File](docs/devin-cli/reference/configuration/config-file.md): Devin CLI 配置文件格式完整参考
-- [Configuration Import](docs/devin-cli/reference/configuration/read-config-from.md): 从 Cursor/Windsurf/Claude Code/Copilot/OpenCode/Zed 导入设置
-- [Configuration Precedence](docs/devin-cli/reference/configuration/global-vs-local.md): 全局、项目、本地设置的优先级关系
-- [Permissions](docs/devin-cli/reference/permissions.md): 用细粒度权限规则控制 agent 能做什么
+2. **No fabricated ACP capabilities.** The UI must not use static constants in place of runtime negotiation.
+   models, modes, slash commands, session operations, image/audio support must all come from ACP initialize/session responses.
+   Capabilities not advertised are not called and not shown.
+
+3. **No second executor.** Agent prompt, tools, terminal, permission, sandbox,
+   MCP, Skills, Rules, Hooks, Plugins are all executed by Devin CLI.
+   Desktop only sends requests and displays results.
+
+4. **No reading or copying Devin credentials.** Auth is done only via ACP-advertised methods and the system browser.
+   Browser auth is not self-implemented.
+
+5. **No self-downloading Devin CLI binary.** Updates are delegated to the local `devin update`.
+   Install packages do not bundle Devin CLI binary.
+
+6. **Sandbox is fail-closed.** When sandbox is requested but the environment does not support it, never silently fall back to unisolated execution.
+
+7. **Read protocol types before changing ACP interaction.** Before editing `shared/acp-types.ts` or `main/acp-transport.ts`,
+   read the ACP-related doc index in `docs/devin-cli.md`.
+
+## Deeper docs
+
+Read on demand; you don't need to read all of these before starting work.
+
+- [readme.md](readme.md) — project overview, prerequisites, feature boundaries, platform limits
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — DSCode MIT source record and Devin CLI distribution constraints
+- [docs/devin-cli.md](docs/devin-cli.md) — index to the local mirror of Devin CLI official docs (ACP, config, extensibility, enterprise, reference)
+- [.github/workflows/desktop.yml](.github/workflows/desktop.yml) — CI: verify → tri-platform packaging → tag-triggered Release
+
+## Testing conventions
+
+- Every module has a co-located `.test.ts` file, using Vitest.
+- If you change a module, run `pnpm test` to confirm its tests pass.
+- Prefer mock tests for ACP-related changes; use `smoke:devin` for real ACP smoke, do not run it by default in CI.
+
+## Release
+
+1. Bump `version` in `apps/desktop/package.json`.
+2. Commit.
+3. `pnpm publish:desktop` — automatically creates a `desktop-v<version>` tag and pushes it; CI runs and the installers appear on GitHub Releases.
+4. Artifacts are unsigned. macOS users must right-click → Open to bypass Gatekeeper; Windows will show a SmartScreen warning.

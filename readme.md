@@ -55,8 +55,6 @@ DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 - Linux：Devin sandbox 需要 `bubblewrap` 和 `socat`。
 - Windows：当前 Devin CLI 文档标明 OS sandbox 不可用；应用不会把未隔离执行显示为 sandbox。
 
-详见 [使用与兼容性说明](docs/implementation-status.md)、[实施交付说明](docs/implementation-delivery.md) 和 [实现研究报告](docs/research/devin-coding-agent-dscode-implementation.md)。
-
 ## 第三方来源
 
 移植自 DSCode 的代码与资产遵循其 MIT License。来源 commit、复制范围和许可文本记录在仓库内的 `THIRD_PARTY_NOTICES.md` 或等价清单中；该记录不构成对 DSCode 的技术依赖。

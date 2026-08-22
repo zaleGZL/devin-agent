@@ -14,7 +14,8 @@
     "build": "pnpm --filter @devin-agent/desktop build",
     "pack": "pnpm --filter @devin-agent/desktop run pack",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
-    "check:independence": "node scripts/check-independence.mjs"
+    "check:independence": "node scripts/check-independence.mjs",
+    "publish:desktop": "node scripts/publish-desktop.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
