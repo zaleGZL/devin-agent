@@ -13,6 +13,7 @@
     "test": "pnpm --filter @devin-agent/desktop test",
     "build": "pnpm --filter @devin-agent/desktop build",
     "pack": "pnpm --filter @devin-agent/desktop run pack",
+    "pack:mac": "node scripts/package-mac-arm64.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "check:independence": "node scripts/check-independence.mjs",
     "publish:desktop": "node scripts/publish-desktop.mjs"
