@@ -855,14 +855,17 @@ export default function App() {
         if (initialModelId) setModel(initialModelId);
       }
       const launchSessionId = launchSessionIdRef.current;
-      const selectedSession = (launchSessionId
+      // Only auto-open a specific session when launched via a deep link
+      // (e.g. ?session=<id>). On normal startup, default to the new-task
+      // page instead of reopening the most recent session.
+      const selectedSession = launchSessionId
         ? allSessions.find((session) => session.id === launchSessionId)
-        : undefined) ?? allSessions.find((session) => !session.archived);
+        : undefined;
       const selectedProject = selectedSession
         ? recentItems.find((item) => item.path === selectedSession.cwd)
-        : undefined;
+        : recentItems[0];
       homeDirectoryRef.current = homeDirectory;
-      activeCwdRef.current = selectedSession?.cwd ?? homeDirectory;
+      activeCwdRef.current = selectedSession?.cwd ?? selectedProject?.path ?? homeDirectory;
       workspaceRef.current = selectedProject?.path;
       setWorkspace(selectedProject?.path);
       if (selectedProject) setExpandedProjects(new Set([selectedProject.path]));

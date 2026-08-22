@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/desktop/src/renderer/assets/devin-agent-logo.png" width="180" alt="Devin Coding Agent">
+  <img src="assets/devin-agent-banner.png" width="960" alt="Devin Coding Agent — open-source desktop agent powered by Devin CLI">
 </p>
 
 <h1 align="center">Devin Coding Agent</h1>
@@ -16,6 +16,12 @@ Devin Coding Agent is a native desktop client that connects to the Devin CLI via
 [Agent Client Protocol (ACP)](https://docs.devin.ai/cli/). It does not bundle or redistribute
 the Devin CLI binary — you install and authenticate the CLI yourself, and the app drives it
 through ACP.
+
+## Preview
+
+<p align="center">
+  <img src="assets/devin-agent-desktop.jpeg" width="1200" alt="Devin Coding Agent desktop application">
+</p>
 
 ## Download
 
