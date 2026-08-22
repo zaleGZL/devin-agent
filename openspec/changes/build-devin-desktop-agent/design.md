@@ -1,6 +1,6 @@
 ## Context
 
-当前仓库只有 Devin CLI 官方文档镜像、研究报告和 OpenSpec 初始化文件，没有应用源码。目标是把 `/Users/guozeling/workspace/git/dscode` 中 provider 无关的 Desktop 源码、样式、资产、测试和构建配置复制到当前仓库，实现相同的桌面信息架构与交互，同时彻底移除 DSCode Core、多 provider 和 DeepSeek 假设。
+当前仓库只有 Devin CLI 官方文档镜像、研究报告和 OpenSpec 初始化文件，没有应用源码。目标是把本地 DSCode 参考 checkout 中 provider 无关的 Desktop 源码、样式、资产、测试和构建配置复制到当前仓库，实现相同的桌面信息架构与交互，同时彻底移除 DSCode Core、多 provider 和 DeepSeek 假设。
 
 Devin CLI 是唯一 Agent runtime。Desktop 通过 `devin acp` 的 stdio JSON-RPC 与其通信；模型、模式、权限、会话和扩展能力均以运行时协议结果为准。当前实机快照为 Devin CLI `3000.4.25`、ACP v1，但版本快照不构成静态产品契约。
 
