@@ -58,4 +58,10 @@ linux:
       arch: [x64]
   artifactName: "${productName}_${version}_${arch}.${ext}"
 
+deb:
+  packageName: devin-agent
+
+rpm:
+  packageName: devin-agent
+
 publish: null
