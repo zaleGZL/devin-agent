@@ -4,7 +4,11 @@
   "version": "0.1.2",
   "private": true,
   "description": "Native desktop client for Devin CLI",
-  "author": "Devin Agent contributors",
+  "homepage": "https://github.com/zaleGZL/devin-agent",
+  "author": {
+    "name": "Devin Agent contributors",
+    "email": "zelingzale@gmail.com"
+  },
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main/index.mjs",
