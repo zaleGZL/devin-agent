@@ -60,6 +60,24 @@ export function createPreviewApi(): DesktopApi {
         { path: terminalWorkspace, name: "termany", lastOpenedAt: new Date(Date.now() - 7_200_000).toISOString() },
       ],
       forget: async () => [],
+      openInDevin: async () => undefined,
+      changes: async (workspacePath) => ({
+        workspacePath,
+        repositoryRoot: workspacePath,
+        branch: "main",
+        isRepository: true,
+        checkedAt: previewNow,
+        changes: [
+          { path: "apps/desktop/src/renderer/App.tsx", kind: "modified", indexStatus: " ", workingTreeStatus: "M", staged: false, unstaged: true },
+          { path: "docs/changes.md", kind: "untracked", indexStatus: "?", workingTreeStatus: "?", staged: false, unstaged: true },
+        ],
+      }),
+      diff: async (_workspacePath, filePath) => ({
+        change: { path: filePath, kind: "modified", indexStatus: " ", workingTreeStatus: "M", staged: false, unstaged: true },
+        content: `diff --git a/${filePath} b/${filePath}\n--- a/${filePath}\n+++ b/${filePath}\n@@ -1,2 +1,2 @@\n-old value\n+new value`,
+        binary: false,
+        truncated: false,
+      }),
       reorder: async (paths) => paths.flatMap((projectPath) => {
         const item = [
           { path: workspace, name: "devin-agent", lastOpenedAt: new Date().toISOString() },

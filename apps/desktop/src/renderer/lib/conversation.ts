@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   AssistantActivity,
+  ChatAnnotation,
   ChatImage,
   ChatMessage,
   ConversationGroup,
@@ -13,10 +14,11 @@ import type {
   WorkItem,
 } from "../../shared/conversation";
 import { toRawDiagnostic } from "./acp-normalizer";
+import { parsePromptAnnotations } from "./annotations";
 
 type JsonRecord = Record<string, unknown>;
 
-export type { AssistantActivity, ChatImage, ChatMessage, ConversationGroup, ToolActivity, TurnResponseEntry, TurnWorkEntry, WorkItem };
+export type { AssistantActivity, ChatAnnotation, ChatImage, ChatMessage, ConversationGroup, ToolActivity, TurnResponseEntry, TurnWorkEntry, WorkItem };
 
 export function createConversationState(sessionId: string, messages: ChatMessage[] = []): ConversationState {
   return {
@@ -173,7 +175,7 @@ export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent | Leg
   return reduceConversation(createConversationState(event.sessionId, messages), event).messages;
 }
 
-export function optimisticUserMessage(text: string, queued = false, images: ChatImage[] = []): ChatMessage {
+export function optimisticUserMessage(text: string, queued = false, images: ChatImage[] = [], annotations: ChatAnnotation[] = []): ChatMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role: "user",
@@ -181,6 +183,7 @@ export function optimisticUserMessage(text: string, queued = false, images: Chat
     timestamp: Date.now(),
     ...(queued ? { queued: true } : {}),
     images,
+    ...(annotations.length > 0 ? { annotations } : {}),
     tools: [],
     work: text ? [{ type: "text", id: "text-0", text }] : [],
   };
@@ -200,11 +203,13 @@ export function getMessageText(content: unknown): string {
 function applyMessageChunk(messages: ChatMessage[], event: Extract<AgentEvent, { type: "message_chunk" }>): ChatMessage[] {
   const incomingText = event.text;
   if (event.role === "user") {
+    const parsed = parsePromptAnnotations(incomingText);
     const last = messages.at(-1);
-    if (last?.role === "user" && (last.text === incomingText || event.messageId === last.id)) {
+    if (last?.role === "user" && (last.text === parsed.text || event.messageId === last.id)) {
       return messages.map((message, index) => index === messages.length - 1 ? {
         ...message,
-        text: incomingText || message.text,
+        text: parsed.text || message.text,
+        annotations: parsed.annotations.length > 0 ? parsed.annotations : message.annotations,
         queued: false,
         timestamp: event.timestamp ?? message.timestamp,
         images: event.images && event.images.length > 0 ? event.images : message.images,
@@ -315,15 +320,17 @@ function applyThoughtChunk(messages: ChatMessage[], event: Extract<AgentEvent, {
 
 function makeMessage(role: "user" | "assistant", text: string, event: { messageId?: string; timestamp?: number; images?: ChatImage[]; phase?: string }, streaming = false): ChatMessage {
   const id = event.messageId ?? `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const parsed = role === "user" ? parsePromptAnnotations(text) : { text, annotations: [] };
   return {
     id,
     role,
-    text,
+    text: parsed.text,
     ...(event.timestamp !== undefined ? { timestamp: event.timestamp } : {}),
     ...(role === "assistant" ? { streaming } : {}),
+    ...(parsed.annotations.length > 0 ? { annotations: parsed.annotations } : {}),
     ...(event.images ? { images: event.images } : { images: [] }),
     tools: [],
-    work: text ? [{ type: "text", id: `text-${id}`, text }] : [],
+    work: parsed.text ? [{ type: "text", id: `text-${id}`, text: parsed.text }] : [],
   };
 }
 
@@ -370,7 +377,9 @@ function appendWorkThinking(work: WorkItem[], messageId: string, text: string, r
 function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefined {
   if (value.role !== "user" && value.role !== "assistant") return undefined;
   const content = value.content;
-  const text = getMessageText(content);
+  const rawText = getMessageText(content);
+  const parsed = value.role === "user" ? parsePromptAnnotations(rawText) : { text: rawText, annotations: [] };
+  const text = parsed.text;
   const thinking = getThinking(content);
   const images = getImages(content);
   const timestamp = normalizeTimestamp(value.timestamp);
@@ -380,6 +389,7 @@ function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefin
     id,
     role: value.role,
     text,
+    ...(parsed.annotations.length > 0 ? { annotations: parsed.annotations } : {}),
     images,
     ...(thinking ? { thinking } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),

@@ -15,6 +15,8 @@ import {
   shell,
 } from "electron";
 import { discoverDevinBinary, validateDevinBinary } from "./devin-discovery";
+import { createDevinWorkspaceUrl } from "./devin-desktop";
+import { listWorkspaceChanges, readWorkspaceDiff } from "./git-changes";
 import { checkDevinCliUpdate, installDevinCliUpdate, type ManifestFetcher } from "./devin-update";
 import { AppSettings } from "./app-settings";
 import { RecentWorkspaces } from "./recent-workspaces";
@@ -486,6 +488,19 @@ function registerIpc(): void {
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
   ipcMain.handle("workspace:forget", (_event, value: unknown) => recentWorkspaces.forget(expectString(value, "workspace path", 4_096)));
   ipcMain.handle("workspace:reorder", (_event, value: unknown) => recentWorkspaces.reorder(expectStringList(value, "workspace paths", 12, 4_096)));
+  ipcMain.handle("workspace:open-in-devin", async (_event, value: unknown) => {
+    const workspacePath = await resolveKnownWorkspace(value);
+    await shell.openExternal(createDevinWorkspaceUrl(workspacePath));
+  });
+  ipcMain.handle("workspace:changes", async (_event, value: unknown) => {
+    return listWorkspaceChanges(await resolveKnownWorkspace(value));
+  });
+  ipcMain.handle("workspace:diff", async (_event, workspaceValue: unknown, fileValue: unknown) => {
+    return readWorkspaceDiff(
+      await resolveKnownWorkspace(workspaceValue),
+      expectString(fileValue, "changed file path", 4_096),
+    );
+  });
 
   ipcMain.handle("files:choose-preview", async (ipcEvent) => {
     const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
@@ -779,6 +794,19 @@ function previewKind(extension: string): FilePreviewKind {
 
 async function safeRealpath(value: string): Promise<string | undefined> {
   try { return await fsp.realpath(value); } catch { return undefined; }
+}
+
+async function resolveKnownWorkspace(value: unknown): Promise<string> {
+  const requestedPath = path.resolve(expectString(value, "workspace path", 4_096));
+  const knownWorkspaces = await recentWorkspaces.list();
+  if (!knownWorkspaces.some((workspace) => path.resolve(workspace.path) === requestedPath)) {
+    throw new Error("Only a project previously opened in Devin Agent can be inspected");
+  }
+  const workspacePath = await safeRealpath(requestedPath);
+  if (!workspacePath || !(await fsp.stat(workspacePath)).isDirectory()) {
+    throw new Error("The project folder is no longer available");
+  }
+  return workspacePath;
 }
 
 function expectString(value: unknown, name: string, maxLength: number): string {

@@ -23,6 +23,34 @@ export interface WorkspaceItem {
   lastOpenedAt: string;
 }
 
+export type WorkspaceChangeKind = "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked" | "conflicted";
+
+export interface WorkspaceChange {
+  path: string;
+  oldPath?: string;
+  kind: WorkspaceChangeKind;
+  indexStatus: string;
+  workingTreeStatus: string;
+  staged: boolean;
+  unstaged: boolean;
+}
+
+export interface WorkspaceChanges {
+  workspacePath: string;
+  repositoryRoot?: string;
+  branch?: string;
+  isRepository: boolean;
+  changes: WorkspaceChange[];
+  checkedAt: string;
+}
+
+export interface WorkspaceDiff {
+  change: WorkspaceChange;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+}
+
 /** Server-owned session metadata plus optional app-local presentation fields. */
 export interface SessionSummary {
   /** Stable Devin session id. */
@@ -185,6 +213,9 @@ export interface DesktopApi {
     recent(): Promise<WorkspaceItem[]>;
     forget(path: string): Promise<WorkspaceItem[]>;
     reorder(paths: string[]): Promise<WorkspaceItem[]>;
+    openInDevin(path: string): Promise<void>;
+    changes(path: string): Promise<WorkspaceChanges>;
+    diff(path: string, filePath: string): Promise<WorkspaceDiff>;
   };
   files: {
     choosePreview(): Promise<FilePreview | null>;

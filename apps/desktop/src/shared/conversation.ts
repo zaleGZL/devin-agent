@@ -17,6 +17,12 @@ export interface ChatImage {
   name?: string;
 }
 
+export interface ChatAnnotation {
+  id: string;
+  text: string;
+  comment?: string;
+}
+
 export interface ToolActivity {
   id: string;
   name: string;
@@ -44,6 +50,7 @@ export interface ChatMessage {
   streaming?: boolean;
   queued?: boolean;
   images: ChatImage[];
+  annotations?: ChatAnnotation[];
   tools: ToolActivity[];
   work: WorkItem[];
 }

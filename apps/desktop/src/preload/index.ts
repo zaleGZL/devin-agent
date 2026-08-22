@@ -38,6 +38,9 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     recent: () => ipcRenderer.invoke("workspace:recent"),
     forget: (workspacePath) => ipcRenderer.invoke("workspace:forget", workspacePath),
     reorder: (workspacePaths) => ipcRenderer.invoke("workspace:reorder", workspacePaths),
+    openInDevin: (workspacePath) => ipcRenderer.invoke("workspace:open-in-devin", workspacePath),
+    changes: (workspacePath) => ipcRenderer.invoke("workspace:changes", workspacePath),
+    diff: (workspacePath, filePath) => ipcRenderer.invoke("workspace:diff", workspacePath, filePath),
   },
   files: {
     choosePreview: () => ipcRenderer.invoke("files:choose-preview"),

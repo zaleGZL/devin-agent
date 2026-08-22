@@ -40,6 +40,7 @@ import {
   FolderOpen,
   Gauge,
   GitBranch,
+  GitCompareArrows,
   GitFork,
   GripVertical,
   ImagePlus,
@@ -49,6 +50,7 @@ import {
   ListTodo,
   LoaderCircle,
   MessageSquareWarning,
+  MessageSquareQuote,
   MessageSquareText,
   Monitor,
   Moon,
@@ -87,6 +89,9 @@ import type {
   SessionSummary,
   UserProfile,
   WorkspaceItem,
+  WorkspaceChange,
+  WorkspaceChanges,
+  WorkspaceDiff,
 } from "../shared/types";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
@@ -98,10 +103,15 @@ import {
   settleAssistantMessages,
   splitAssistantTurn,
   type ChatImage,
+  type ChatAnnotation,
   type ChatMessage,
   type ToolActivity,
   type TurnWorkEntry,
 } from "./lib/conversation";
+import { formatPromptWithAnnotations } from "./lib/annotations";
+import { sameWorkspaceChanges } from "./lib/git-changes";
+import { parseUnifiedDiff } from "./lib/git-diff";
+import devinDesktopIcon from "./assets/devin-desktop-icon.png";
 import { applyColorScheme } from "./lib/color-scheme";
 import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
@@ -148,6 +158,26 @@ interface Attachment extends ChatImage {
 interface QueuedPrompt {
   text: string;
   images: ChatImage[];
+  annotations?: ChatAnnotation[];
+}
+
+interface AnnotationSelection {
+  text: string;
+  range: Range;
+  left: number;
+  top: number;
+}
+
+interface AnnotationCommentEditor {
+  id: string;
+  left: number;
+  top: number;
+}
+
+interface AnnotationMarker {
+  id: string;
+  left: number;
+  top: number;
 }
 
 interface PreviewImage extends ChatImage {
@@ -181,6 +211,17 @@ const MIN_INSPECTOR_WIDTH = 320;
 const MAX_INSPECTOR_WIDTH = 880;
 const MIN_CONVERSATION_WIDTH = 440;
 const INSPECTOR_RESIZER_WIDTH = 7;
+const ANNOTATION_HIGHLIGHT_NAME = "devin-agent-response-annotations";
+
+function replaceAnnotationHighlights(ranges: Range[]) {
+  const css = CSS as typeof CSS & { highlights?: { delete(name: string): void; set(name: string, value: unknown): void } };
+  const HighlightConstructor = (globalThis as typeof globalThis & { Highlight?: new (...values: Range[]) => unknown }).Highlight;
+  css.highlights?.delete(ANNOTATION_HIGHLIGHT_NAME);
+  if (ranges.length > 0 && HighlightConstructor) {
+    css.highlights?.set(ANNOTATION_HIGHLIGHT_NAME, new HighlightConstructor(...ranges));
+  }
+}
+
 function inspectorBoundsForLayout(layoutWidth: number) {
   const availableWidth = layoutWidth - MIN_CONVERSATION_WIDTH - INSPECTOR_RESIZER_WIDTH;
   return {
@@ -216,6 +257,11 @@ export default function App() {
   const [sessionStats, setSessionStats] = useState<AgentSessionStats>();
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [draftAnnotations, setDraftAnnotations] = useState<ChatAnnotation[]>([]);
+  const [annotationSelection, setAnnotationSelection] = useState<AnnotationSelection>();
+  const [annotationCommentEditor, setAnnotationCommentEditor] = useState<AnnotationCommentEditor>();
+  const [annotationCommentDraft, setAnnotationCommentDraft] = useState("");
+  const [annotationMarkers, setAnnotationMarkers] = useState<AnnotationMarker[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [followUpQueues, setFollowUpQueues] = useState<Map<string, FollowUpItem<QueuedPrompt>[]>>(() => new Map());
@@ -227,11 +273,17 @@ export default function App() {
   const [recentSectionOpen, setRecentSectionOpen] = useState(true);
   const [contextCardOpen, setContextCardOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorMode, setInspectorMode] = useState<"preview" | "changes">("preview");
   const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_INSPECTOR_WIDTH);
   const [filePreview, setFilePreview] = useState<FilePreview>();
   const [recentPreviewFiles, setRecentPreviewFiles] = useState<string[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
+  const [workspaceChanges, setWorkspaceChanges] = useState<WorkspaceChanges>();
+  const [selectedChange, setSelectedChange] = useState<WorkspaceChange>();
+  const [workspaceDiff, setWorkspaceDiff] = useState<WorkspaceDiff>();
+  const [changesLoading, setChangesLoading] = useState(false);
+  const [changesError, setChangesError] = useState<string>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -249,6 +301,8 @@ export default function App() {
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const annotationCommentInputRef = useRef<HTMLInputElement>(null);
+  const annotationRangesRef = useRef(new Map<string, Range>());
   const sessionRenameInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followingConversationTailRef = useRef(true);
@@ -258,6 +312,7 @@ export default function App() {
   const homeDirectoryRef = useRef<string | undefined>(undefined);
   const workspaceRef = useRef<string | undefined>(undefined);
   const previewRequestRef = useRef(0);
+  const changesRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
   const activeSessionRef = useRef<string | undefined>(undefined);
   const launchSessionIdRef = useRef(new URLSearchParams(window.location.search).get("session") ?? undefined);
@@ -276,6 +331,55 @@ export default function App() {
   const sidebarDragRef = useRef<SidebarDragSnapshot | undefined>(undefined);
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
   const activeFollowUps = activeSession ? followUpQueues.get(activeSession) ?? [] : [];
+
+  const clearDraftAnnotations = useCallback(() => {
+    annotationRangesRef.current.clear();
+    replaceAnnotationHighlights([]);
+    setDraftAnnotations([]);
+    setAnnotationSelection(undefined);
+    setAnnotationCommentEditor(undefined);
+    setAnnotationCommentDraft("");
+    setAnnotationMarkers([]);
+  }, []);
+
+  useEffect(() => {
+    if (!annotationCommentEditor) return;
+    annotationCommentInputRef.current?.focus();
+  }, [annotationCommentEditor]);
+
+  useEffect(() => {
+    const ranges = draftAnnotations.flatMap((annotation) => {
+      const range = annotationRangesRef.current.get(annotation.id);
+      return range ? [range] : [];
+    });
+    replaceAnnotationHighlights(ranges);
+    return () => replaceAnnotationHighlights([]);
+  }, [draftAnnotations]);
+
+  useEffect(() => {
+    const updateMarkers = () => {
+      const markers = draftAnnotations.flatMap<AnnotationMarker>((annotation) => {
+        const range = annotationRangesRef.current.get(annotation.id);
+        const rects = range ? Array.from(range.getClientRects()) : [];
+        const rect = rects.at(-1);
+        if (!rect || rect.width === 0 || rect.height === 0) return [];
+        return [{
+          id: annotation.id,
+          left: Math.min(window.innerWidth - 24, rect.right + 6),
+          top: Math.max(8, rect.top + rect.height / 2 - 10),
+        }];
+      });
+      setAnnotationMarkers(markers);
+    };
+    updateMarkers();
+    const scroller = scrollRef.current;
+    scroller?.addEventListener("scroll", updateMarkers, { passive: true });
+    window.addEventListener("resize", updateMarkers);
+    return () => {
+      scroller?.removeEventListener("scroll", updateMarkers);
+      window.removeEventListener("resize", updateMarkers);
+    };
+  }, [draftAnnotations]);
 
   useEffect(() => {
     modelRef.current = model;
@@ -391,6 +495,7 @@ export default function App() {
   const openFilePreview = useCallback(async (filePath: string) => {
     const requestId = ++previewRequestRef.current;
     setContextCardOpen(false);
+    setInspectorMode("preview");
     setInspectorOpen(true);
     setPreviewLoading(true);
     setPreviewError(undefined);
@@ -414,6 +519,7 @@ export default function App() {
   const choosePreviewFile = useCallback(async () => {
     const requestId = ++previewRequestRef.current;
     setContextCardOpen(false);
+    setInspectorMode("preview");
     setInspectorOpen(true);
     setPreviewLoading(true);
     setPreviewError(undefined);
@@ -430,6 +536,75 @@ export default function App() {
       if (requestId === previewRequestRef.current) setPreviewLoading(false);
     }
   }, [t]);
+
+  const refreshWorkspaceChanges = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background === true;
+    const projectPath = workspaceRef.current;
+    if (!projectPath) {
+      setWorkspaceChanges(undefined);
+      setSelectedChange(undefined);
+      setWorkspaceDiff(undefined);
+      return;
+    }
+    const requestId = ++changesRequestRef.current;
+    if (!background) {
+      setChangesLoading(true);
+      setChangesError(undefined);
+    }
+    try {
+      const snapshot = await window.devinAgent.workspace.changes(projectPath);
+      if (requestId !== changesRequestRef.current) return;
+      setWorkspaceChanges((current) => sameWorkspaceChanges(current, snapshot) ? current : snapshot);
+      setChangesError(undefined);
+      setSelectedChange((current) => {
+        if (!current || snapshot.changes.some((change) => change.path === current.path)) return current;
+        setWorkspaceDiff(undefined);
+        return undefined;
+      });
+    } catch (error) {
+      if (!background && requestId === changesRequestRef.current) {
+        setChangesError(cleanError(error instanceof Error ? error.message : String(error)));
+      }
+    } finally {
+      if (!background && requestId === changesRequestRef.current) setChangesLoading(false);
+    }
+  }, []);
+
+  const openWorkspaceDiff = useCallback(async (change: WorkspaceChange) => {
+    const projectPath = workspaceRef.current;
+    if (!projectPath) return;
+    const requestId = ++changesRequestRef.current;
+    setSelectedChange(change);
+    setWorkspaceDiff(undefined);
+    setChangesLoading(true);
+    setChangesError(undefined);
+    try {
+      const diff = await window.devinAgent.workspace.diff(projectPath, change.path);
+      if (requestId === changesRequestRef.current) setWorkspaceDiff(diff);
+    } catch (error) {
+      if (requestId === changesRequestRef.current) {
+        setChangesError(cleanError(error instanceof Error ? error.message : String(error)));
+      }
+    } finally {
+      if (requestId === changesRequestRef.current) setChangesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    changesRequestRef.current += 1;
+    setWorkspaceChanges(undefined);
+    setSelectedChange(undefined);
+    setWorkspaceDiff(undefined);
+    setChangesError(undefined);
+    setChangesLoading(false);
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!inspectorOpen || inspectorMode !== "changes" || !workspace || selectedChange) return;
+    void refreshWorkspaceChanges();
+    const timer = window.setInterval(() => void refreshWorkspaceChanges({ background: true }), 3_000);
+    return () => window.clearInterval(timer);
+  }, [inspectorMode, inspectorOpen, refreshWorkspaceChanges, selectedChange, workspace]);
 
   const startAgent = useCallback(async (
     cwd?: string,
@@ -791,6 +966,78 @@ export default function App() {
     if (event.deltaY < 0) followingConversationTailRef.current = false;
   }, []);
 
+  const captureAnnotationSelection = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setAnnotationSelection(undefined);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const elementForNode = (node: Node) => node.nodeType === Node.ELEMENT_NODE
+      ? node as Element
+      : node.parentElement;
+    const startSource = elementForNode(range.startContainer)?.closest<HTMLElement>("[data-annotation-source]");
+    const endSource = elementForNode(range.endContainer)?.closest<HTMLElement>("[data-annotation-source]");
+    const text = selection.toString().replace(/\s+/g, " ").trim();
+    if (!startSource || startSource !== endSource || !text) {
+      setAnnotationSelection(undefined);
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    const toolbarWidth = 250;
+    setAnnotationSelection({
+      text,
+      range: range.cloneRange(),
+      left: Math.max(10, Math.min(window.innerWidth - toolbarWidth - 10, rect.left + rect.width / 2 - toolbarWidth / 2)),
+      top: rect.top > 58 ? rect.top - 48 : rect.bottom + 10,
+    });
+  }, []);
+
+  const addSelectionAnnotation = useCallback((withComment: boolean) => {
+    if (!annotationSelection) return;
+    const id = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `annotation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    annotationRangesRef.current.set(id, annotationSelection.range);
+    setDraftAnnotations((current) => [...current, { id, text: annotationSelection.text }]);
+    if (withComment) {
+      setAnnotationCommentDraft("");
+      setAnnotationCommentEditor({
+        id,
+        left: annotationSelection.left,
+        top: annotationSelection.top,
+      });
+    }
+    setAnnotationSelection(undefined);
+    window.getSelection()?.removeAllRanges();
+    textareaRef.current?.focus();
+  }, [annotationSelection]);
+
+  const saveAnnotationComment = useCallback(() => {
+    if (!annotationCommentEditor) return;
+    const comment = annotationCommentDraft.trim();
+    if (comment) {
+      setDraftAnnotations((current) => current.map((annotation) => annotation.id === annotationCommentEditor.id
+        ? { ...annotation, comment }
+        : annotation));
+    }
+    setAnnotationCommentEditor(undefined);
+    setAnnotationCommentDraft("");
+    textareaRef.current?.focus();
+  }, [annotationCommentDraft, annotationCommentEditor]);
+
+  const removeDraftAnnotation = useCallback((annotationId?: string) => {
+    if (!annotationId) {
+      clearDraftAnnotations();
+      return;
+    }
+    annotationRangesRef.current.delete(annotationId);
+    setDraftAnnotations((current) => current.filter((annotation) => annotation.id !== annotationId));
+    setAnnotationCommentEditor((current) => current?.id === annotationId ? undefined : current);
+  }, [clearDraftAnnotations]);
+
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(undefined), 5200);
@@ -850,6 +1097,7 @@ export default function App() {
     setSessionStats(undefined);
     setUiRequest(undefined);
     setAttachments([]);
+    clearDraftAnnotations();
     if (projectPath) setExpandedProjects((current) => new Set(current).add(projectPath));
     textareaRef.current?.focus();
   };
@@ -857,6 +1105,15 @@ export default function App() {
   const clearWorkspace = async () => {
     if (!workspace || loading || running) return;
     await createThreadInProject(undefined);
+  };
+
+  const openWorkspaceInDevin = async () => {
+    if (!workspace) return;
+    try {
+      await window.devinAgent.workspace.openInDevin(workspace);
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
   };
 
   const toggleWorkspace = (item: WorkspaceItem) => {
@@ -875,6 +1132,7 @@ export default function App() {
     selectActiveSession(session.path);
     setMessages(cachedMessages ?? []);
     setAgentPlan(undefined);
+    clearDraftAnnotations();
     setSessionLocked(session.locked === true);
     await startAgent(session.cwd, session.path, undefined, projectPath, { replaySession: cachedMessages === undefined });
   };
@@ -1016,11 +1274,12 @@ export default function App() {
     prompt: QueuedPrompt,
     command: "prompt" | "follow_up" = "prompt",
   ) => {
-    const displayText = prompt.text || t("composer.attachedImage");
+    const annotations = prompt.annotations ?? [];
+    const displayText = prompt.text || (annotations.length > 0 ? t("annotation.defaultRequest") : t("composer.attachedImage"));
     followingConversationTailRef.current = targetSessionId === activeSessionRef.current;
     updateSessionMessages(targetSessionId, (current) => [
       ...current,
-      optimisticUserMessage(displayText, false, prompt.images),
+      optimisticUserMessage(displayText, false, prompt.images, annotations),
     ]);
     const sentAt = new Date().toISOString();
     setSessions((current) => {
@@ -1050,7 +1309,9 @@ export default function App() {
     try {
       await window.devinAgent.agent.command(command, {
         sessionId: targetSessionId,
-        message: prompt.text || t("composer.describeImage"),
+        message: annotations.length > 0
+          ? formatPromptWithAnnotations(prompt.text || t("annotation.defaultRequest"), annotations)
+          : prompt.text || t("composer.describeImage"),
         ...(prompt.images.length ? { images: prompt.images.map((image) => ({ type: "image", ...image })) } : {}),
       });
     } catch (error) {
@@ -1142,12 +1403,17 @@ export default function App() {
   const sendMessage = async ({ interrupt = false }: { interrupt?: boolean } = {}) => {
     if (sessionLocked) return;
     const text = draft.trim();
-    if (!text && attachments.length === 0) return;
+    if (!text && attachments.length === 0 && draftAnnotations.length === 0) return;
     if (attachments.length > 0 && !imagePromptEnabled) {
       setToast({ message: t("composer.imagesUnavailable"), type: "error" });
       return;
     }
     const pendingAttachments = attachments;
+    const pendingAnnotations = draftAnnotations;
+    const pendingAnnotationRanges = new Map(pendingAnnotations.flatMap((annotation) => {
+      const range = annotationRangesRef.current.get(annotation.id);
+      return range ? [[annotation.id, range] as const] : [];
+    }));
     let targetSessionId = activeSessionRef.current;
     if (!targetSessionId) {
       const cwd = activeCwdRef.current ?? homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
@@ -1186,12 +1452,14 @@ export default function App() {
     const prompt: QueuedPrompt = {
       text,
       images: pendingAttachments.map(({ data, mimeType }) => ({ data, mimeType })),
+      ...(pendingAnnotations.length > 0 ? { annotations: pendingAnnotations } : {}),
     };
     const alreadyRunning = runningSessionIdsRef.current.has(targetSessionId)
       || interruptingSessionIdsRef.current.has(targetSessionId);
     followingConversationTailRef.current = true;
     setDraft("");
     setAttachments([]);
+    clearDraftAnnotations();
     if (alreadyRunning && !interrupt) {
       setFollowUpQueue(targetSessionId, (queue) => enqueueFollowUp(queue, prompt));
       return;
@@ -1202,6 +1470,11 @@ export default function App() {
     } catch (error) {
       setDraft((current) => current || text);
       setAttachments((current) => current.length > 0 ? current : pendingAttachments);
+      setDraftAnnotations((current) => {
+        if (current.length > 0) return current;
+        annotationRangesRef.current = new Map(pendingAnnotationRanges);
+        return pendingAnnotations;
+      });
       if (!isAgentSessionClosedError(error)) {
         setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
       }
@@ -1408,14 +1681,27 @@ export default function App() {
 
   const showPreviewPanel = () => {
     setContextCardOpen(false);
+    setInspectorMode("preview");
     setPreviewError(undefined);
     setInspectorOpen(true);
   };
 
+  const showChangesPanel = () => {
+    setContextCardOpen(false);
+    setInspectorMode("changes");
+    setSelectedChange(undefined);
+    setWorkspaceDiff(undefined);
+    setInspectorOpen(true);
+    void refreshWorkspaceChanges();
+  };
+
   const closePreviewPanel = () => {
     previewRequestRef.current += 1;
+    changesRequestRef.current += 1;
     setPreviewLoading(false);
+    setChangesLoading(false);
     setPreviewError(undefined);
+    setChangesError(undefined);
     setInspectorOpen(false);
   };
 
@@ -1991,8 +2277,27 @@ export default function App() {
                 {!sidebarOpen && <button className="icon-button sidebar-reveal" onClick={() => setSidebarOpen(true)} aria-label={t("sidebar.show")}><PanelLeft size={16} /></button>}
                 <div className="thread-heading"><strong>{crop(activeTitle, 62)}</strong><span>{sessionLocked ? <Shield size={12} /> : workspace ? <GitBranch size={12} /> : <MessageSquareText size={12} />} {sessionLocked ? "Read-only Devin session" : workspaceName ?? t("status.regularTask")}</span></div>
               </div>
-              {!inspectorOpen && <div className="header-actions">
-                {ENABLE_CONVERSATION_CONTEXT && <button
+              <div className="header-actions">
+                {workspace && <button
+                  className={`changes-toolbar-button${inspectorOpen && inspectorMode === "changes" ? " selected" : ""}`}
+                  onClick={() => inspectorOpen && inspectorMode === "changes" ? closePreviewPanel() : showChangesPanel()}
+                  aria-label={t("changes.title")}
+                  aria-pressed={inspectorOpen && inspectorMode === "changes"}
+                  title={t("changes.title")}
+                >
+                  <GitCompareArrows size={15} />
+                  <span>{t("changes.title")}</span>
+                  {workspaceChanges && workspaceChanges.changes.length > 0 && <small>{workspaceChanges.changes.length}</small>}
+                </button>}
+                {!inspectorOpen && workspace && <button
+                  className="open-in-devin-button"
+                  onClick={() => void openWorkspaceInDevin()}
+                  aria-label={t("toolbar.openInDevin")}
+                  title={t("toolbar.openInDevin")}
+                >
+                  <span className="devin-desktop-mark"><img src={devinDesktopIcon} alt="" /></span>
+                </button>}
+                {!inspectorOpen && ENABLE_CONVERSATION_CONTEXT && <button
                   className={`icon-button context-card-toggle ${contextCardOpen ? "selected" : ""}`}
                   onClick={() => {
                     const next = !contextCardOpen;
@@ -2004,15 +2309,15 @@ export default function App() {
                 >
                   <ListFilter size={16} />
                 </button>}
-                <button
+                {!inspectorOpen && <button
                   className="icon-button"
                   onClick={showPreviewPanel}
                   aria-label={t("toolbar.openSidebar")}
                   aria-pressed="false"
                 >
                   <PanelRight size={17} />
-                </button>
-              </div>}
+                </button>}
+              </div>
             </header>
 
             <section className={`conversation-pane${ENABLE_CONVERSATION_CONTEXT && contextCardOpen ? " context-card-visible" : ""}${activeFollowUps.length > 0 ? " has-follow-up-queue" : ""}`}>
@@ -2021,6 +2326,7 @@ export default function App() {
               ref={scrollRef}
               onScroll={handleConversationScroll}
               onWheel={handleConversationWheel}
+              onMouseUp={captureAnnotationSelection}
             >
               {loading ? (
                 <div className="loading-state"><LoaderCircle className="spin" size={20} /><span>{t("status.openingWorkspace")}</span></div>
@@ -2101,6 +2407,26 @@ export default function App() {
                   </div>
                 )}
                 <div className={`composer ${running ? "composer-running" : ""}`}>
+                  {draftAnnotations.length > 0 && (
+                    <div className="annotation-chip-wrap">
+                      <div className="annotation-preview" role="tooltip">
+                        {draftAnnotations.map((annotation, index) => (
+                          <div className="annotation-preview-item" key={annotation.id}>
+                            <strong>{index + 1}. {t("annotation.selectedText")}</strong>
+                            <p>{annotation.text}</p>
+                            {annotation.comment && <small>{t("annotation.comment")}: {annotation.comment}</small>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="annotation-chip">
+                        <MessageSquareQuote size={14} aria-hidden="true" />
+                        <span>{t("annotation.count", { count: draftAnnotations.length })}</span>
+                        <button type="button" onClick={() => removeDraftAnnotation()} aria-label={t("annotation.removeAll")}>
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {attachments.length > 0 && (
                     <div className="attachment-strip">
                       {attachments.map((attachment, index) => (
@@ -2137,7 +2463,9 @@ export default function App() {
                   />
                   <div className="composer-toolbar">
                     <div className="composer-tools">
-                      <AttachmentMenu disabled={!imagePromptEnabled || sessionLocked} onChange={(event) => void handleAttachment(event)} />
+                      {imagePromptEnabled && !sessionLocked && (
+                        <AttachmentMenu onChange={(event) => void handleAttachment(event)} />
+                      )}
                       <PermissionPicker
                         value={permission}
                         modes={availableModes}
@@ -2156,11 +2484,11 @@ export default function App() {
                       />
                       <button
                         className={`send-button ${running ? "stop-button" : ""}`}
-                        onClick={() => running && !draft.trim() && attachments.length === 0 ? void stopAgent() : void sendMessage()}
-                        disabled={sessionLocked || (!running && !draft.trim() && attachments.length === 0)}
+                        onClick={() => running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 ? void stopAgent() : void sendMessage()}
+                        disabled={sessionLocked || (!running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0)}
                         aria-label={running ? t("composer.sendOrStop") : t("composer.send")}
                       >
-                        {running && !draft.trim() && attachments.length === 0 ? <CircleStop size={17} /> : <ArrowUp size={17} />}
+                        {running && !draft.trim() && attachments.length === 0 && draftAnnotations.length === 0 ? <CircleStop size={17} /> : <ArrowUp size={17} />}
                       </button>
                     </div>
                   </div>
@@ -2195,24 +2523,98 @@ export default function App() {
                 onKeyDown={resizeInspectorByKeyboard}
                 onDoubleClick={() => setInspectorWidth(DEFAULT_INSPECTOR_WIDTH)}
               />
-              <FilePreviewPanel
-                width={inspectorWidth}
-                preview={filePreview}
-                loading={previewLoading}
-                error={previewError}
-                recentFiles={recentPreviewFiles}
-                onChoose={() => void choosePreviewFile()}
-                onPreview={(filePath) => void openFilePreview(filePath)}
-                onRefresh={() => filePreview && void openFilePreview(filePreview.path)}
-                onOpenExternal={() => filePreview && void window.devinAgent.files.openPreview(filePreview.id).catch((error) => {
-                  setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
-                })}
-                onClose={closePreviewPanel}
-              />
+              {inspectorMode === "changes" ? (
+                <ChangesPanel
+                  width={inspectorWidth}
+                  snapshot={workspaceChanges}
+                  selectedChange={selectedChange}
+                  diff={workspaceDiff}
+                  loading={changesLoading}
+                  error={changesError}
+                  onRefresh={() => selectedChange ? void openWorkspaceDiff(selectedChange) : void refreshWorkspaceChanges()}
+                  onSelect={(change) => void openWorkspaceDiff(change)}
+                  onBack={() => {
+                    changesRequestRef.current += 1;
+                    setSelectedChange(undefined);
+                    setWorkspaceDiff(undefined);
+                    setChangesError(undefined);
+                    setChangesLoading(false);
+                    void refreshWorkspaceChanges();
+                  }}
+                  onClose={closePreviewPanel}
+                />
+              ) : (
+                <FilePreviewPanel
+                  width={inspectorWidth}
+                  preview={filePreview}
+                  loading={previewLoading}
+                  error={previewError}
+                  recentFiles={recentPreviewFiles}
+                  onChoose={() => void choosePreviewFile()}
+                  onPreview={(filePath) => void openFilePreview(filePath)}
+                  onRefresh={() => filePreview && void openFilePreview(filePreview.path)}
+                  onOpenExternal={() => filePreview && void window.devinAgent.files.openPreview(filePreview.id).catch((error) => {
+                    setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+                  })}
+                  onClose={closePreviewPanel}
+                />
+              )}
             </>
           )}
         </div>
       </main>
+
+      {annotationSelection && (
+        <div
+          className="annotation-selection-toolbar"
+          role="toolbar"
+          aria-label={t("annotation.actions")}
+          style={{ left: annotationSelection.left, top: annotationSelection.top }}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <button type="button" onClick={() => addSelectionAnnotation(false)}>{t("annotation.addToChat")}</button>
+          <button type="button" onClick={() => addSelectionAnnotation(true)}>{t("annotation.moreDetails")}</button>
+        </div>
+      )}
+
+      {annotationCommentEditor && (
+        <div
+          className="annotation-comment-editor"
+          style={{
+            left: Math.max(10, Math.min(window.innerWidth - 380, annotationCommentEditor.left)),
+            top: annotationCommentEditor.top,
+          }}
+        >
+          <input
+            ref={annotationCommentInputRef}
+            value={annotationCommentDraft}
+            onChange={(event) => setAnnotationCommentDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                saveAnnotationComment();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setAnnotationCommentEditor(undefined);
+                setAnnotationCommentDraft("");
+              }
+            }}
+            placeholder={t("annotation.optionalComment")}
+            aria-label={t("annotation.optionalComment")}
+          />
+          <button type="button" onClick={saveAnnotationComment}>{t("annotation.done")}</button>
+        </div>
+      )}
+
+      {annotationMarkers.map((marker, index) => (
+        <span
+          className="annotation-marker"
+          key={marker.id}
+          style={{ left: marker.left, top: marker.top }}
+          aria-hidden="true"
+        >{index + 1}</span>
+      ))}
 
       {sessionMenu && sessionMenuItem && (
         <>
@@ -2506,6 +2908,20 @@ function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(i
   const { t } = useI18n();
   return (
     <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
+      {message.annotations && message.annotations.length > 0 && (
+        <details className="user-annotation-context">
+          <summary><MessageSquareQuote size={13} />{t("annotation.count", { count: message.annotations.length })}</summary>
+          <div className="user-annotation-list">
+            {message.annotations.map((annotation, index) => (
+              <div key={annotation.id}>
+                <strong>{index + 1}. {t("annotation.selectedText")}</strong>
+                <p>{annotation.text}</p>
+                {annotation.comment && <small>{t("annotation.comment")}: {annotation.comment}</small>}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
       {message.images.length > 0 && (
         <div className={`message-images${message.images.length > 1 ? " multiple" : ""}`}>
           {message.images.map((image, index) => (
@@ -2624,7 +3040,7 @@ function FollowUpQueue({
                 event.preventDefault();
                 onMove(item.id, target.id);
               }}
-              aria-label={t("queue.drag", { message: item.value.text || t("composer.attachedImage") })}
+              aria-label={t("queue.drag", { message: item.value.text || (item.value.annotations?.length ? t("annotation.defaultRequest") : t("composer.attachedImage")) })}
             >
               <span
                 className="follow-up-drag-handle"
@@ -2668,7 +3084,8 @@ function FollowUpQueue({
                 </div>
               ) : (
                 <div className="follow-up-copy">
-                  <span>{item.value.text || t("composer.attachedImage")}</span>
+                  <span>{item.value.text || (item.value.annotations?.length ? t("annotation.defaultRequest") : t("composer.attachedImage"))}</span>
+                  {item.value.annotations && item.value.annotations.length > 0 && <small>{t("annotation.count", { count: item.value.annotations.length })}</small>}
                   {item.value.images.length > 0 && <small>{t("queue.images", { count: item.value.images.length })}</small>}
                 </div>
               )}
@@ -2738,7 +3155,7 @@ function AssistantTurn({
         />
       )}
       {responses.map((response) => (
-        <div className="assistant-response" key={response.key}>
+        <div className="assistant-response" key={response.key} data-annotation-source={response.key}>
           <MarkdownContent text={response.text} onPreviewFile={onPreviewFile} />
           {response.streaming && <span className="stream-cursor" />}
         </div>
@@ -2853,6 +3270,128 @@ function ReasoningBlock({ text, active, autoExpand }: { text: string; active: bo
       {open && <p>{text}</p>}
     </div>
   );
+}
+
+function ChangesPanel(props: {
+  width: number;
+  snapshot?: WorkspaceChanges;
+  selectedChange?: WorkspaceChange;
+  diff?: WorkspaceDiff;
+  loading: boolean;
+  error?: string;
+  onRefresh(): void;
+  onSelect(change: WorkspaceChange): void;
+  onBack(): void;
+  onClose(): void;
+}) {
+  const { t } = useI18n();
+  const diffLines = useMemo(() => parseUnifiedDiff(props.diff?.content ?? ""), [props.diff?.content]);
+  const visibleDiffLines = useMemo(() => diffLines.filter((line) => line.kind !== "header"), [diffLines]);
+  const fileName = props.selectedChange ? fileNameFromPath(props.selectedChange.path) : undefined;
+  const parentPath = props.selectedChange?.path.includes("/") ? props.selectedChange.path.slice(0, props.selectedChange.path.lastIndexOf("/")) : undefined;
+  return (
+    <aside className="inspector preview-panel changes-panel" style={{ width: props.width, flexBasis: props.width }}>
+      <div className="preview-header">
+        <div className="preview-heading">
+          {props.selectedChange ? (
+            <button className="preview-file-icon changes-back-button" onClick={props.onBack} aria-label={t("changes.back")} title={t("changes.back")}>
+              <ChevronRight size={15} />
+            </button>
+          ) : <span className="preview-file-icon"><GitCompareArrows size={15} /></span>}
+          <span>
+            <strong>{fileName ?? t("changes.title")}</strong>
+            <small title={props.selectedChange?.path}>{parentPath ?? props.snapshot?.branch ?? t("changes.readOnly")}</small>
+          </span>
+        </div>
+        <div className="preview-actions">
+          <button className="icon-button" onClick={props.onRefresh} title={t("changes.refresh")} aria-label={t("changes.refresh")}><RefreshCwIcon /></button>
+          <button className="icon-button" onClick={props.onClose} aria-label={t("common.close")}><X size={15} /></button>
+        </div>
+      </div>
+
+      <div className="preview-stage changes-stage">
+        {props.loading && <div className="preview-loading"><LoaderCircle className="spin" size={18} /><span>{props.selectedChange ? t("changes.loadingDiff") : t("changes.loading")}</span></div>}
+        {!props.loading && props.error && (
+          <div className="preview-empty preview-error">
+            <CircleAlert size={22} />
+            <strong>{t("changes.cannotLoad")}</strong>
+            <span>{props.error}</span>
+            <button className="preview-secondary-button" onClick={props.onRefresh}>{t("changes.tryAgain")}</button>
+          </div>
+        )}
+        {!props.loading && !props.error && props.selectedChange && props.diff && (
+          <div className="diff-preview" role="region" aria-label={t("changes.diffFor", { file: props.selectedChange.path })}>
+            {visibleDiffLines.map((line, index) => line.kind === "hunk" ? (
+              index === 0 ? null : <div className="diff-hunk-gap" key={`${index}:${line.text}`} aria-label={line.text}><span>•••</span></div>
+            ) : (
+              <div className={`diff-line ${line.kind}`} key={`${index}:${line.text}`}>
+                <span className="diff-line-number">{line.oldLine ?? ""}</span>
+                <span className="diff-line-number">{line.newLine ?? ""}</span>
+                <span className="diff-line-marker" aria-hidden="true">{line.kind === "addition" ? "+" : line.kind === "deletion" ? "−" : ""}</span>
+                <code>
+                  {line.segments
+                    ? line.segments.map((segment, segmentIndex) => <mark className={segment.changed ? "diff-inline-change" : undefined} key={`${segmentIndex}:${segment.text}`}>{segment.text}</mark>)
+                    : line.text.slice(line.kind === "context" || line.kind === "addition" || line.kind === "deletion" ? 1 : 0) || " "}
+                </code>
+              </div>
+            ))}
+          </div>
+        )}
+        {!props.loading && !props.error && !props.selectedChange && props.snapshot && !props.snapshot.isRepository && (
+          <div className="preview-empty">
+            <span className="preview-empty-icon"><GitCompareArrows size={23} /></span>
+            <strong>{t("changes.notRepository")}</strong>
+            <span>{t("changes.notRepositoryDescription")}</span>
+          </div>
+        )}
+        {!props.loading && !props.error && !props.selectedChange && props.snapshot?.isRepository && props.snapshot.changes.length === 0 && (
+          <div className="preview-empty">
+            <span className="preview-empty-icon"><Check size={23} /></span>
+            <strong>{t("changes.clean")}</strong>
+            <span>{t("changes.cleanDescription")}</span>
+          </div>
+        )}
+        {!props.loading && !props.error && !props.selectedChange && props.snapshot?.isRepository && props.snapshot.changes.length > 0 && (
+          <div className="changes-list">
+            <div className="changes-list-heading">
+              <span>{t("changes.changedFiles")}</span>
+              <small>{props.snapshot.changes.length}</small>
+            </div>
+            {props.snapshot.changes.map((change) => {
+              const directory = change.path.includes("/") ? change.path.slice(0, change.path.lastIndexOf("/")) : undefined;
+              return (
+                <button className="change-row" key={`${change.path}:${change.indexStatus}:${change.workingTreeStatus}`} onClick={() => props.onSelect(change)} title={change.path}>
+                  <FileText size={15} />
+                  <span className="change-row-copy">
+                    <strong>{fileNameFromPath(change.path)}</strong>
+                    {directory && <small>{directory}</small>}
+                  </span>
+                  <span className={`change-status ${change.kind}`}>{changeStatusLabel(change)}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="preview-statusbar changes-statusbar">
+        <span>{t("changes.readOnly")}</span>
+        {props.diff?.truncated && <span>{t("changes.truncated")}</span>}
+        {props.snapshot?.branch && !props.selectedChange && <span>{props.snapshot.branch}</span>}
+        {props.selectedChange && <span>{props.selectedChange.staged ? t("changes.staged") : t("changes.workingTree")}</span>}
+      </div>
+    </aside>
+  );
+}
+
+function changeStatusLabel(change: WorkspaceChange): string {
+  if (change.kind === "untracked") return "U";
+  if (change.kind === "conflicted") return "!";
+  if (change.kind === "renamed") return "R";
+  if (change.kind === "copied") return "C";
+  if (change.kind === "added") return "A";
+  if (change.kind === "deleted") return "D";
+  return "M";
 }
 
 function FilePreviewPanel(props: {
@@ -3973,7 +4512,7 @@ function AuthNotice({ event, onClose }: { event: Extract<AuthUiEvent, { kind: "n
   return <div className="modal-backdrop"><div className="approval-dialog" role="dialog" aria-modal="true"><div className="approval-icon"><Bot size={19} /></div><h3>{notice.type === "device_code" ? t("auth.completeSignIn") : t("auth.continueInBrowser")}</h3><p>{instructions}</p>{notice.userCode && <div className="device-code">{notice.userCode}</div>}<div className="dialog-actions"><button className="primary-button" onClick={onClose}>{t("auth.done")}</button></div></div></div>;
 }
 
-function AttachmentMenu({ disabled, onChange }: { disabled: boolean; onChange(event: ChangeEvent<HTMLInputElement>): void }) {
+function AttachmentMenu({ onChange }: { onChange(event: ChangeEvent<HTMLInputElement>): void }) {
   const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -4001,8 +4540,7 @@ function AttachmentMenu({ disabled, onChange }: { disabled: boolean; onChange(ev
         type="button"
         className={`composer-tool-button${open ? " open" : ""}`}
         onClick={() => setOpen((current) => !current)}
-        disabled={disabled}
-        title={disabled ? "Image input is not advertised by this Devin session/model." : t("composer.attachImages")}
+        title={t("composer.attachImages")}
         aria-label={t("composer.moreActions")}
         aria-haspopup="menu"
         aria-expanded={open}

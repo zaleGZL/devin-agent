@@ -41,3 +41,9 @@ Devin CLI is an independently installed runtime. This repository does not
 bundle, download, replace, or redistribute its binary. Users must install and
 authenticate Devin CLI according to the official documentation under
 `docs/devin-cli/`.
+
+## Devin brand icon
+
+The small “Open in Devin Desktop” mark is the official Devin favicon fetched
+from `https://app.devin.ai/favicon.ico`. Devin and its logo are trademarks of
+their respective owner; the asset is used only to identify the external app.

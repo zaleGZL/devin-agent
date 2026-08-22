@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyAgentEvent, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, settleAssistantMessages, splitAssistantTurn } from "./conversation";
+import { formatPromptWithAnnotations } from "./annotations";
 
 describe("conversation events", () => {
   it("normalizes assistant text, thinking, and tool calls", () => {
@@ -73,6 +74,42 @@ describe("conversation events", () => {
     });
     expect(messages).toHaveLength(1);
     expect(messages[0]?.images).toHaveLength(1);
+  });
+
+  it("restores response annotations without exposing the transport envelope", () => {
+    const wireText = formatPromptWithAnnotations("Please fix this.", [{
+      id: "annotation-1",
+      text: "The selected response text",
+      comment: "Keep this concise",
+    }]);
+    const stored = normalizeMessages([{
+      role: "user",
+      content: [{ type: "text", text: wireText }],
+    }]);
+
+    expect(stored[0]).toMatchObject({
+      role: "user",
+      text: "Please fix this.",
+      annotations: [{ text: "The selected response text", comment: "Keep this concise" }],
+    });
+  });
+
+  it("deduplicates an annotated ACP echo against the optimistic user message", () => {
+    const annotations = [{ id: "annotation-1", text: "Selected answer" }];
+    const wireText = formatPromptWithAnnotations("Continue", annotations);
+    let messages = [optimisticUserMessage("Continue", false, [], annotations)];
+
+    messages = applyAgentEvent(messages, {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "user",
+      text: wireText,
+      phase: "end",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ text: "Continue", queued: false });
+    expect(messages[0]?.annotations).toHaveLength(1);
   });
 
   it("correlates tool start and completion events", () => {
