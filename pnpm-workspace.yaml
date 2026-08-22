@@ -1,9 +1,10 @@
 packages:
   - apps/*
 
-onlyBuiltDependencies:
-  - electron
-  - esbuild
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  esbuild: true
 
 supportedArchitectures:
   os:
