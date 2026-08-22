@@ -444,7 +444,7 @@ function upsertLastAssistantTool(messages: ChatMessage[], activity: ToolActivity
   let index = findLastAssistantInCurrentTurn(messages, false);
   let next = messages;
   if (index < 0) {
-    next = [...messages, { id: `assistant-${Date.now()}`, role: "assistant", text: "", timestamp: activity.startedAt ?? Date.now(), streaming: false, images: [], tools: [], work: [] }];
+    next = [...messages, { id: `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`, role: "assistant", text: "", timestamp: activity.startedAt ?? Date.now(), streaming: false, images: [], tools: [], work: [] }];
     index = next.length - 1;
   }
   return next.map((message, messageIndex) => {

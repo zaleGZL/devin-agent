@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyAgentEvent, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, settleAssistantMessages, splitAssistantTurn } from "./conversation";
 
 describe("conversation events", () => {
@@ -242,6 +242,32 @@ describe("conversation events", () => {
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
     expect(messages[0]?.tools).toHaveLength(0);
     expect(messages[2]?.tools[0]?.id).toBe("call-2");
+  });
+
+  it("keeps generated tool-only assistant message ids unique within the same millisecond", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const random = vi.spyOn(Math, "random").mockReturnValueOnce(0.1).mockReturnValueOnce(0.2);
+    try {
+      let messages = applyAgentEvent([], {
+        type: "tool_start",
+        sessionId: "session-1",
+        toolId: "call-1",
+        name: "read_file",
+      });
+      messages = [...messages, normalizeMessages([{ role: "user", content: [{ type: "text", text: "Continue" }] }])[0]!];
+      messages = applyAgentEvent(messages, {
+        type: "tool_start",
+        sessionId: "session-1",
+        toolId: "call-2",
+        name: "read_file",
+      });
+
+      const assistantIds = messages.filter((message) => message.role === "assistant").map((message) => message.id);
+      expect(new Set(assistantIds).size).toBe(assistantIds.length);
+    } finally {
+      now.mockRestore();
+      random.mockRestore();
+    }
   });
 
   it("starts a new assistant message after a completed tool instead of reordering it", () => {

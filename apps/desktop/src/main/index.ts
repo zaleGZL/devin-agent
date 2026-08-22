@@ -32,6 +32,7 @@ import {
   buildAgentSnapshot,
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
+  resolveRuntimeSessionOpenAction,
 } from "./runtime-adapter";
 import {
   isPathInside,
@@ -185,9 +186,10 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
       let session: Record<string, unknown> | undefined;
       if (targetSessionId) {
         if (!cwd) throw new Error("A workspace path is required to load this Devin session");
-        session = raw.sessionId && raw.sessionId !== targetSessionId
+        const action = resolveRuntimeSessionOpenAction(targetSessionId, raw.sessionId, Boolean(raw.session), options.replaySession);
+        session = action === "switch"
           ? await raw.switchSession?.(targetSessionId, { cwd, additionalDirectories: options.additionalDirectories })
-          : raw.sessionId === targetSessionId && raw.session
+          : action === "reuse"
             ? raw.session
             : await raw.loadSession?.(targetSessionId, { cwd, additionalDirectories: options.additionalDirectories });
       } else {
@@ -201,7 +203,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
     };
     return {
       start(options) {
-        const key = JSON.stringify([options.cwd, options.sessionId, options.sessionPath, options.additionalDirectories, options.model]);
+        const key = JSON.stringify([options.cwd, options.sessionId, options.sessionPath, options.additionalDirectories, options.model, options.replaySession]);
         if (pendingRuntimeStart?.key === key) return pendingRuntimeStart.promise;
         const previous = pendingRuntimeStart?.promise.catch(() => undefined);
         const promise = (async () => {
@@ -722,6 +724,7 @@ function expectAgentStartOptions(value: unknown): AgentStartOptions {
     ...(typeof data.effort === "string" ? { effort: data.effort } : {}),
     ...(typeof data.sessionPath === "string" ? { sessionPath: data.sessionPath } : {}),
     ...(typeof data.sessionId === "string" ? { sessionId: data.sessionId } : {}),
+    ...(data.replaySession === undefined ? {} : { replaySession: expectBoolean(data.replaySession, "replay session") }),
     ...(Array.isArray(data.additionalDirectories)
       ? { additionalDirectories: data.additionalDirectories.map((entry) => expectString(entry, "additional directory", 4_096)).map((entry) => path.resolve(entry)).slice(0, 16) }
       : {}),

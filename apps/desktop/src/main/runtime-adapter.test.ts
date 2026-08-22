@@ -4,9 +4,17 @@ import {
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
   platformSandboxDiagnostic,
+  resolveRuntimeSessionOpenAction,
 } from "./runtime-adapter";
 
 describe("runtime adapter", () => {
+  it("replays a transcript when the renderer has lost its local session history", () => {
+    expect(resolveRuntimeSessionOpenAction("session-a", "session-a", true, true)).toBe("load");
+    expect(resolveRuntimeSessionOpenAction("session-a", "session-b", true, true)).toBe("load");
+    expect(resolveRuntimeSessionOpenAction("session-a", "session-a", true, false)).toBe("reuse");
+    expect(resolveRuntimeSessionOpenAction("session-a", "session-b", true, false)).toBe("switch");
+  });
+
   it("builds model and mode selectors only from the current session response", () => {
     const snapshot = buildAgentSnapshot({
       raw: {

@@ -15,6 +15,24 @@ export interface RuntimeSessionLike extends JsonRecord {
   raw?: JsonRecord;
 }
 
+export type RuntimeSessionOpenAction = "load" | "switch" | "reuse";
+
+/**
+ * The ACP host knowing a session does not mean the renderer still owns its
+ * transcript. A replay request must therefore win over the host's reuse
+ * shortcut so session/load can emit the saved history again.
+ */
+export function resolveRuntimeSessionOpenAction(
+  targetSessionId: string,
+  activeSessionId: string | undefined,
+  hasActiveSession: boolean,
+  replaySession = false,
+): RuntimeSessionOpenAction {
+  if (replaySession) return "load";
+  if (activeSessionId && activeSessionId !== targetSessionId) return "switch";
+  return activeSessionId === targetSessionId && hasActiveSession ? "reuse" : "load";
+}
+
 /** Build the renderer snapshot exclusively from initialize + session results. */
 export function buildAgentSnapshot(
   initializeCapabilities: unknown,

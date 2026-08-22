@@ -108,6 +108,8 @@ import { supportsImagePrompt } from "./lib/capabilities";
 import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
+import { partitionSidebarSessions } from "./lib/sidebar-sessions";
+import { clearSessionUnread, markBackgroundSessionUnread } from "./lib/session-attention";
 import type { DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
 
@@ -172,6 +174,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -213,6 +216,7 @@ export default function App() {
   const newSessionModelIdRef = useRef<string | null>(null);
   const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
   const runningSessionIdsRef = useRef(new Set<string>());
+  const unreadSessionIdsRef = useRef(new Set<string>());
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
 
   useEffect(() => {
@@ -229,10 +233,25 @@ export default function App() {
     sessionRenameInputRef.current?.select();
   }, [renamingSessionId]);
 
+  const setSessionUnread = useCallback((sessionId: string | undefined, unread: boolean) => {
+    const current = unreadSessionIdsRef.current;
+    const next = unread
+      ? markBackgroundSessionUnread(current, sessionId, activeSessionRef.current)
+      : clearSessionUnread(current, sessionId);
+    if (next === current) return;
+    unreadSessionIdsRef.current = next;
+    setUnreadSessionIds(next);
+  }, []);
+
   const selectActiveSession = useCallback((sessionId?: string) => {
+    if (sessionId !== activeSessionRef.current) {
+      followingConversationTailRef.current = true;
+      previousConversationScrollTopRef.current = 0;
+    }
+    setSessionUnread(sessionId, false);
     activeSessionRef.current = sessionId;
     setActiveSessionState(sessionId);
-  }, []);
+  }, [setSessionUnread]);
 
   const markSessionRunning = useCallback((sessionId: string | undefined, value: boolean) => {
     if (!sessionId) return;
@@ -342,7 +361,7 @@ export default function App() {
     sessionPath?: string,
     overrides?: { provider?: ProviderId; model?: string; effort?: string; permission?: PermissionMode; sandbox?: SandboxMode },
     projectPath?: string,
-    behavior?: { background?: boolean; providerStatuses?: ProviderStatus[] },
+    behavior?: { background?: boolean; providerStatuses?: ProviderStatus[]; replaySession?: boolean },
   ) => {
     const background = behavior?.background === true;
     const nextProvider = overrides?.provider ?? provider;
@@ -377,6 +396,7 @@ export default function App() {
         permission: overrides?.permission ?? permission,
         sandbox: overrides?.sandbox ?? sandbox,
         ...(sessionPath ? { sessionPath } : {}),
+        ...(sessionPath && behavior?.replaySession ? { replaySession: true } : {}),
       });
       const nextSessionId = snapshot.sessionId ?? sessionPath;
       selectActiveSession(nextSessionId);
@@ -438,11 +458,12 @@ export default function App() {
       if (selectedProject) setExpandedProjects(new Set([selectedProject.path]));
       selectActiveSession(selectedSession?.path);
       setSessionLocked(selectedSession?.locked === true);
-      if (configured && selectedSession && selectedSession.locked !== true) {
+      if (configured && selectedSession) {
         try {
           const snapshot = await window.devinAgent.agent.start({
             cwd: selectedSession.cwd,
             sessionPath: selectedSession.path,
+            replaySession: true,
             project: Boolean(selectedProject),
             provider: configured.id,
             ...(configured.defaultModel ? { model: configured.defaultModel } : {}),
@@ -475,6 +496,7 @@ export default function App() {
       }
       if (event.type === "agent_settled") {
         markSessionRunning(eventSessionId, false);
+        setSessionUnread(eventSessionId, true);
         if (eventSessionId) updateSessionMessages(eventSessionId, settleAssistantMessages);
         if (!eventSessionId || eventSessionId === activeSessionRef.current) setUiRequest(undefined);
         void refreshSessions();
@@ -600,7 +622,7 @@ export default function App() {
       offAuth();
       offCommand?.();
     };
-  }, [markSessionRunning, refreshSessionStats, refreshSessions, t, updateSessionMessages]);
+  }, [markSessionRunning, refreshSessionStats, refreshSessions, setSessionUnread, t, updateSessionMessages]);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -622,6 +644,19 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [running, searchOpen, sessionMenu]);
+
+  useEffect(() => {
+    if (!activeSession || loading) return;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    followingConversationTailRef.current = true;
+    previousConversationScrollTopRef.current = 0;
+    const frame = window.requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight;
+      previousConversationScrollTopRef.current = scroller.scrollTop;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSession, loading]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -648,7 +683,7 @@ export default function App() {
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [activeSession]);
+  }, [activeSession, loading]);
 
   const handleConversationScroll = useCallback(() => {
     const scroller = scrollRef.current;
@@ -750,17 +785,12 @@ export default function App() {
   const openSession = async (session: SessionSummary) => {
     if (session.path === activeSession || loading) return;
     const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
+    const cachedMessages = sessionMessagesRef.current.get(session.path);
     selectActiveSession(session.path);
-    setMessages(sessionMessagesRef.current.get(session.path) ?? []);
+    setMessages(cachedMessages ?? []);
     setAgentPlan(undefined);
     setSessionLocked(session.locked === true);
-    if (session.locked === true) {
-      activeCwdRef.current = session.cwd;
-      workspaceRef.current = projectPath;
-      setWorkspace(projectPath);
-      return;
-    }
-    await startAgent(session.cwd, session.path, undefined, projectPath);
+    await startAgent(session.cwd, session.path, undefined, projectPath, { replaySession: cachedMessages === undefined });
   };
 
   const openSessionMenu = (event: ReactMouseEvent<HTMLElement>, session: SessionSummary) => {
@@ -829,6 +859,7 @@ export default function App() {
       const archived = await window.devinAgent.sessions.archive?.(session.id);
       if (!archived) throw new Error(t("archive.failed"));
       setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...archived, archived: true } : item));
+      setSessionUnread(session.path, false);
       setArchiveNotice({ ...session, ...archived, archived: true });
     } catch (error) {
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
@@ -1116,6 +1147,7 @@ export default function App() {
   const activeAssistantHasWork = latestAssistantGroup?.type === "assistant"
     && splitAssistantTurn(latestAssistantGroup.messages, running).work.length > 0;
   const projectPaths = useMemo(() => new Set(workspaces.map((item) => item.path)), [workspaces]);
+  const sidebarSessionGroups = useMemo(() => partitionSidebarSessions(sessions, projectPaths), [projectPaths, sessions]);
 
   const showPreviewPanel = () => {
     setContextCardOpen(false);
@@ -1176,10 +1208,15 @@ export default function App() {
   const projectSessions = useMemo(() => {
     const grouped = new Map<string, SessionSummary[]>();
     for (const item of workspaces) grouped.set(item.path, []);
-    for (const session of sessions) if (!session.archived) grouped.get(session.cwd)?.push(session);
+    for (const session of sidebarSessionGroups.project) grouped.get(session.cwd)?.push(session);
     for (const projectItems of grouped.values()) projectItems.sort(compareSidebarSessions);
     return grouped;
-  }, [sessions, workspaces]);
+  }, [sidebarSessionGroups.project, workspaces]);
+  const pinnedSessions = useMemo(() => {
+    const query = sessionQuery.trim().toLowerCase();
+    const items = [...sidebarSessionGroups.pinned].sort(compareSidebarSessions);
+    return query ? items.filter((session) => session.title.toLowerCase().includes(query)) : items;
+  }, [sessionQuery, sidebarSessionGroups.pinned]);
   const filteredWorkspaces = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
     if (!query) return workspaces;
@@ -1190,9 +1227,9 @@ export default function App() {
   }, [projectSessions, sessionQuery, workspaces]);
   const recentTasks = useMemo(() => {
     const query = sessionQuery.trim().toLowerCase();
-    const tasks = sessions.filter((session) => !session.archived && !projectPaths.has(session.cwd)).sort(compareSidebarSessions);
+    const tasks = [...sidebarSessionGroups.recent].sort(compareSidebarSessions);
     return query ? tasks.filter((session) => session.title.toLowerCase().includes(query)) : tasks;
-  }, [projectPaths, sessionQuery, sessions]);
+  }, [sessionQuery, sidebarSessionGroups.recent]);
   const activeTitle = sessions.find((session) => session.path === activeSession)?.title ?? (messages[0]?.text || t("status.newThread"));
   const workspaceName = workspace ? workspace.split(/[\\/]/).filter(Boolean).at(-1) : undefined;
   const selectedModel = availableModels.find((candidate) => candidate.provider === provider && candidate.id === model);
@@ -1228,6 +1265,62 @@ export default function App() {
         </div>
 
         <div className="thread-list">
+          {pinnedSessions.length > 0 && (
+            <>
+              <div className="section-label pinned-label">{t("sidebar.pinned")}</div>
+              <div className="pinned-task-list">
+                {pinnedSessions.map((session) => (
+                  <div
+                    key={session.path}
+                    className={`recent-task-item pinned-task-item ${session.path === activeSession ? "active" : ""}`}
+                    onContextMenu={(event) => openSessionMenu(event, session)}
+                  >
+                    {renamingSessionId === session.id ? (
+                      <input
+                        ref={sessionRenameInputRef}
+                        className="session-rename-input pinned-session-rename"
+                        value={sessionRenameDraft}
+                        maxLength={120}
+                        aria-label={t("session.rename")}
+                        onChange={(event) => setSessionRenameDraft(event.target.value)}
+                        onBlur={() => void commitSessionRename(session)}
+                        onKeyDown={(event) => {
+                          event.stopPropagation();
+                          if (event.key === "Enter") { event.preventDefault(); void commitSessionRename(session); }
+                          if (event.key === "Escape") { event.preventDefault(); cancelSessionRename(); }
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="thread-row pinned-task-row"
+                        onClick={() => void openSession(session)}
+                        title={session.title}
+                        aria-current={session.path === activeSession ? "page" : undefined}
+                      >
+                        <span className="thread-copy"><strong>{session.title}</strong></span>
+                      </button>
+                    )}
+                    {runningSessionIds.has(session.path) && (
+                      <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
+                    )}
+                    {!runningSessionIds.has(session.path) && unreadSessionIds.has(session.path) && (
+                      <span className="session-row-unread" role="img" aria-label={t("status.newActivity")} title={t("status.newActivity")} />
+                    )}
+                    <button
+                      className="session-more-action"
+                      onClick={(event) => openSessionMenu(event, session)}
+                      aria-label={t("session.actions", { title: session.title })}
+                      aria-haspopup="menu"
+                      title={t("session.actions", { title: session.title })}
+                    >
+                      <Ellipsis size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
           <button type="button" className="section-label section-toggle" onClick={() => setProjectsSectionOpen((open) => !open)} aria-expanded={projectsSectionOpen}>
             <span>{t("sidebar.projects")}</span>
             <ChevronRight size={12} />
@@ -1300,9 +1393,12 @@ export default function App() {
                               <span>{session.title}</span>
                             </button>
                           )}
-                          {runningSessionIds.has(session.path)
-                            ? <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
-                            : session.pinned ? <Pin className="session-row-status session-pin-status" size={11} fill="currentColor" aria-label={t("session.pinned")} /> : null}
+                          {runningSessionIds.has(session.path) && (
+                            <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
+                          )}
+                          {!runningSessionIds.has(session.path) && unreadSessionIds.has(session.path) && (
+                            <span className="session-row-unread" role="img" aria-label={t("status.newActivity")} title={t("status.newActivity")} />
+                          )}
                           <button
                             className="session-more-action"
                             onClick={(event) => openSessionMenu(event, session)}
@@ -1366,9 +1462,12 @@ export default function App() {
                     <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
                   </button>
                 )}
-                {runningSessionIds.has(session.path)
-                  ? <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
-                  : session.pinned ? <Pin className="session-row-status session-pin-status" size={11} fill="currentColor" aria-label={t("session.pinned")} /> : null}
+                {runningSessionIds.has(session.path) && (
+                  <LoaderCircle className="spin session-row-status" size={12} aria-label={t("status.running")} />
+                )}
+                {!runningSessionIds.has(session.path) && unreadSessionIds.has(session.path) && (
+                  <span className="session-row-unread" role="img" aria-label={t("status.newActivity")} title={t("status.newActivity")} />
+                )}
                 <button
                   className="session-more-action"
                   onClick={(event) => openSessionMenu(event, session)}

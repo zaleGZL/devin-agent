@@ -90,6 +90,8 @@ export interface AgentStartOptions {
   sandbox: SandboxMode;
   sessionPath?: string;
   sessionId?: string;
+  /** Ask Devin ACP to replay the transcript even when this session is already known by the host. */
+  replaySession?: boolean;
   additionalDirectories?: string[];
 }
 
