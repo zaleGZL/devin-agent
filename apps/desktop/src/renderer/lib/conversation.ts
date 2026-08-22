@@ -354,6 +354,10 @@ function findAssistantTarget(messages: ChatMessage[], messageId?: string, phase?
   if (messageId) {
     const byId = messages.findIndex((message) => message.id === messageId && message.role === "assistant");
     if (byId > currentTurnStart) return byId;
+    // ACP defines a changed messageId as a new message boundary. Falling back
+    // to the previous streaming message here merges distinct messages and can
+    // move later content ahead of intervening tool activity.
+    return -1;
   }
   if (phase === "start") return -1;
   const streamingIndex = findLastAssistantInCurrentTurn(messages, true);
@@ -362,16 +366,36 @@ function findAssistantTarget(messages: ChatMessage[], messageId?: string, phase?
 
 function appendWorkText(work: WorkItem[], messageId: string, text: string, replace: boolean): WorkItem[] {
   if (!text) return work;
-  const index = work.findIndex((item) => item.type === "text" && item.id === `text-${messageId}`);
-  if (index < 0) return [...work, { type: "text", id: `text-${messageId}`, text }];
-  return work.map((item, itemIndex) => itemIndex === index && item.type === "text" ? { ...item, text: replace ? text : item.text + text } : item);
+  const idPrefix = `text-${messageId}`;
+  const lastIndex = work.length - 1;
+  const last = work[lastIndex];
+  if (last?.type === "text" && belongsToWorkSegment(last.id, idPrefix)) {
+    return work.map((item, itemIndex) => itemIndex === lastIndex && item.type === "text" ? { ...item, text: replace ? text : item.text + text } : item);
+  }
+  return [...work, { type: "text", id: nextWorkSegmentId(work, idPrefix), text }];
 }
 
 function appendWorkThinking(work: WorkItem[], messageId: string, text: string, replace: boolean): WorkItem[] {
   if (!text) return work;
-  const index = work.findIndex((item) => item.type === "thinking" && item.id === `thinking-${messageId}`);
-  if (index < 0) return [...work, { type: "thinking", id: `thinking-${messageId}`, text }];
-  return work.map((item, itemIndex) => itemIndex === index && item.type === "thinking" ? { ...item, text: replace ? text : item.text + text } : item);
+  const idPrefix = `thinking-${messageId}`;
+  const lastIndex = work.length - 1;
+  const last = work[lastIndex];
+  if (last?.type === "thinking" && belongsToWorkSegment(last.id, idPrefix)) {
+    return work.map((item, itemIndex) => itemIndex === lastIndex && item.type === "thinking" ? { ...item, text: replace ? text : item.text + text } : item);
+  }
+  return [...work, { type: "thinking", id: nextWorkSegmentId(work, idPrefix), text }];
+}
+
+function belongsToWorkSegment(itemId: string, idPrefix: string): boolean {
+  return itemId === idPrefix || itemId.startsWith(`${idPrefix}:segment-`);
+}
+
+function nextWorkSegmentId(work: WorkItem[], idPrefix: string): string {
+  const ids = new Set(work.map((item) => item.id));
+  if (!ids.has(idPrefix)) return idPrefix;
+  let segment = 2;
+  while (ids.has(`${idPrefix}:segment-${segment}`)) segment += 1;
+  return `${idPrefix}:segment-${segment}`;
 }
 
 function messageFromRecord(value: JsonRecord, id: string): ChatMessage | undefined {

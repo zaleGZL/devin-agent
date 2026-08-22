@@ -1,7 +1,7 @@
 {
   "name": "@devin-agent/desktop",
   "productName": "Devin Agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Native desktop client for Devin CLI",
   "author": "Devin Agent contributors",

@@ -358,4 +358,90 @@ describe("conversation events", () => {
       "Verify next",
     ]);
   });
+
+  it("keeps streamed text after a tool in arrival order without message ids", () => {
+    let messages = applyAgentEvent([], {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "assistant",
+      text: "Inspect first.",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_start",
+      sessionId: "session-1",
+      toolId: "call-1",
+      name: "read_file",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_end",
+      sessionId: "session-1",
+      toolId: "call-1",
+      status: "complete",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "assistant",
+      text: "Then summarize",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "assistant",
+      text: " the result.",
+    });
+
+    expect(messages[0]?.work.map((item) => item.type === "tool" ? item.toolId : item.text)).toEqual([
+      "Inspect first.",
+      "call-1",
+      "Then summarize the result.",
+    ]);
+  });
+
+  it("keeps streamed thinking after a tool in arrival order", () => {
+    let messages = applyAgentEvent([], {
+      type: "thought_chunk",
+      sessionId: "session-1",
+      text: "Inspect first.",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "tool_start",
+      sessionId: "session-1",
+      toolId: "call-1",
+      name: "read_file",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "thought_chunk",
+      sessionId: "session-1",
+      text: "Verify next.",
+    });
+
+    expect(messages[0]?.work.map((item) => item.type === "tool" ? item.toolId : item.text)).toEqual([
+      "Inspect first.",
+      "call-1",
+      "Verify next.",
+    ]);
+  });
+
+  it("treats a changed ACP message id as a new assistant message", () => {
+    let messages = applyAgentEvent([], {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "assistant",
+      messageId: "message-1",
+      text: "First message.",
+    });
+    messages = applyAgentEvent(messages, {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "assistant",
+      messageId: "message-2",
+      text: "Second message.",
+    });
+
+    expect(messages.map((message) => [message.id, message.text])).toEqual([
+      ["message-1", "First message."],
+      ["message-2", "Second message."],
+    ]);
+  });
 });
