@@ -71,6 +71,10 @@ These rules always apply. Violating them causes CI failures or runtime errors.
 7. **Read protocol types before changing ACP interaction.** Before editing `shared/acp-types.ts` or `main/acp-transport.ts`,
    read the ACP-related doc index in `docs/devin-cli.md`.
 
+8. **Every code commit bumps the desktop patch version.** Before committing any code change, increment the final
+   `x.y.Z` component in `apps/desktop/package.json` and include that version bump in the same commit.
+   Never reuse or skip this patch-version update for a code commit.
+
 ## Deeper docs
 
 Read on demand; you don't need to read all of these before starting work.

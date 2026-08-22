@@ -16,6 +16,30 @@ export interface ParsedAnnotationPrompt {
   annotations: ChatAnnotation[];
 }
 
+interface ClipboardEventLike {
+  clipboardData: Pick<DataTransfer, "setData"> | null;
+  preventDefault(): void;
+}
+
+export interface PreparedAnnotationSelection {
+  annotationText: string;
+  clipboardText: string;
+}
+
+export function prepareAnnotationSelection(value: string): PreparedAnnotationSelection {
+  return {
+    annotationText: value.replace(/\s+/g, " ").trim(),
+    clipboardText: value,
+  };
+}
+
+export function writeSelectionToClipboardEvent(event: ClipboardEventLike, text: string): boolean {
+  if (!event.clipboardData) return false;
+  event.clipboardData.setData("text/plain", text);
+  event.preventDefault();
+  return true;
+}
+
 export function formatPromptWithAnnotations(text: string, annotations: ChatAnnotation[]): string {
   if (annotations.length === 0) return text;
   const payload: StoredAnnotation[] = annotations.map((annotation) => ({
