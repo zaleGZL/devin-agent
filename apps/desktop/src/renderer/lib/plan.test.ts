@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseStructuredPlan } from "./plan";
+import {
+  formatMarkdownPlanRevisionPrompt,
+  formatPlanRevisionPrompt,
+  parseExitPlanPermission,
+  parseStructuredPlan,
+} from "./plan";
 
 describe("parseStructuredPlan", () => {
   const plan = {
@@ -24,5 +29,63 @@ describe("parseStructuredPlan", () => {
   it("rejects unrelated or malformed input", () => {
     expect(parseStructuredPlan("not json")).toBeUndefined();
     expect(parseStructuredPlan({ plan: [{ step: "Missing status" }] })).toBeUndefined();
+  });
+});
+
+describe("formatPlanRevisionPrompt", () => {
+  const plan = {
+    explanation: "Keep the change small",
+    steps: [
+      { step: "Inspect the existing flow", status: "completed" as const },
+      { step: "Implement the editor", status: "in_progress" as const },
+      { step: "Verify the UI", status: "pending" as const },
+    ],
+  };
+
+  it("serializes the complete edited plan for Devin", () => {
+    expect(formatPlanRevisionPrompt(plan, "en")).toContain("1. [completed] Inspect the existing flow");
+    expect(formatPlanRevisionPrompt(plan, "en")).toContain("2. [in progress] Implement the editor");
+    expect(formatPlanRevisionPrompt(plan, "en")).toContain("Explanation: Keep the change small");
+  });
+
+  it("uses localized control language without dropping statuses", () => {
+    expect(formatPlanRevisionPrompt(plan, "zh-CN")).toContain("2. [进行中] Implement the editor");
+    expect(formatPlanRevisionPrompt(plan, "zh-CN")).toContain("说明：Keep the change small");
+  });
+});
+
+describe("parseExitPlanPermission", () => {
+  it("extracts Devin's Markdown plan and the reject option", () => {
+    expect(parseExitPlanPermission({
+      sessionId: "session-1",
+      toolCall: { rawInput: { plan: "# Plan\n\n1. Verify" } },
+      options: [
+        { optionId: "plan_normal", label: "Yes, implement plan" },
+        { optionId: "reject_once", label: "No, plan needs changes" },
+      ],
+    })).toEqual({ plan: "# Plan\n\n1. Verify", rejectOptionId: "reject_once" });
+  });
+
+  it("correlates a partial permission request with the earlier tool update", () => {
+    expect(parseExitPlanPermission({
+      toolCall: { toolCallId: "exit-plan-1" },
+      options: [{ optionId: "reject_once", label: "No, plan needs changes" }],
+    }, [{ id: "exit-plan-1", args: { plan: "# Revised plan\n\n1. Inspect" } }])).toEqual({
+      plan: "# Revised plan\n\n1. Inspect",
+      rejectOptionId: "reject_once",
+    });
+  });
+
+  it("rejects unrelated permission requests", () => {
+    expect(parseExitPlanPermission({ toolCall: { rawInput: { command: "pnpm test" } }, options: [] })).toBeUndefined();
+  });
+});
+
+describe("formatMarkdownPlanRevisionPrompt", () => {
+  it("requires another approval instead of starting implementation", () => {
+    const prompt = formatMarkdownPlanRevisionPrompt("# Revised plan", "en");
+    expect(prompt).toContain("request plan approval again");
+    expect(prompt).toContain("Do not start implementation");
+    expect(prompt).toContain("# Revised plan");
   });
 });

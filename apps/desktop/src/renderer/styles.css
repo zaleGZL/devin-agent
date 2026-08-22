@@ -87,31 +87,23 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .project-task-item, .recent-task-item { position: relative; display: flex; align-items: center; border-radius: 6px; transition: background-color .12s ease, opacity .12s ease; }
 .project-task-item:hover, .recent-task-item:hover { background: var(--tree-hover); }
 .project-task-item.active, .recent-task-item.active { background: var(--tree-selected); }
-.project-task-row { width: 100%; height: 32px; padding: 0 7px 0 32px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; transition: padding-right .16s ease; }
+.project-task-row { width: 100%; height: 32px; padding: 0 34px 0 32px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; }
 .project-task-row > span:first-child { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 430; }
 .project-task-empty { padding: 4px 8px 6px 32px; color: var(--tree-muted); font-size: 12px; line-height: 1.45; }
 .project-task-more { width: 100%; height: 30px; padding: 0 8px 0 32px; border-radius: 6px; color: var(--tree-muted); font-size: 12px; text-align: left; }
 .project-task-more:hover { background: var(--tree-hover); color: var(--tree-ink); }
-.thread-row { width: 100%; min-height: 34px; padding: 4px 7px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; margin: 0; }
+.thread-row { width: 100%; height: 34px; min-height: 34px; padding: 4px 7px; overflow: hidden; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; margin: 0; }
 .thread-row:hover { background: var(--tree-hover); }
 .thread-row.active { background: var(--tree-selected); }
 .thread-copy { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; }
 .thread-copy strong { min-width: 0; flex: 1; font-size: 12.5px; font-weight: 480; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.thread-copy small { color: var(--tree-muted); font-size: 10.5px; flex: none; }
-.recent-task-row .thread-copy small { max-width: 0; overflow: hidden; opacity: 0; transform: translateX(4px); transition: max-width .16s ease, opacity .12s ease, transform .16s ease; }
-.recent-task-item:hover .thread-copy small, .recent-task-item:focus-within .thread-copy small { max-width: 72px; opacity: 1; transform: translateX(0); }
 .thread-more { opacity: 0; }
 .thread-row:hover .thread-more { opacity: 1; }
-.pinned-task-row { padding: 4px 7px 4px 28px; transition: padding-right .16s ease; }
-.recent-task-row { padding: 4px 7px 4px 28px; transition: padding-right .16s ease; }
-.project-task-item:hover .project-task-row, .project-task-item:focus-within .project-task-row, .recent-task-item:hover .thread-row, .recent-task-item:focus-within .thread-row { padding-right: 34px; }
-.project-task-item.has-session-indicator .project-task-row, .recent-task-item.has-session-indicator .thread-row { padding-right: 28px; }
-.project-task-item.has-session-indicator:hover .project-task-row, .project-task-item.has-session-indicator:focus-within .project-task-row, .recent-task-item.has-session-indicator:hover .thread-row, .recent-task-item.has-session-indicator:focus-within .thread-row { padding-right: 55px; }
-.session-row-status { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); flex: none; color: var(--tree-muted); pointer-events: none; transition: right .16s ease; }
+.pinned-task-row, .recent-task-row { padding: 4px 34px 4px 28px; }
+.project-task-item.has-session-indicator .project-task-row, .recent-task-item.has-session-indicator .thread-row { padding-right: 55px; }
+.session-row-status { position: absolute; right: 34px; top: 50%; transform: translateY(-50%); flex: none; color: var(--tree-muted); pointer-events: none; }
 .session-row-status.spin { animation: session-spin .9s linear infinite; }
-.session-row-unread { position: absolute; right: 11px; top: 50%; width: 7px; height: 7px; transform: translateY(-50%); flex: none; border-radius: 50%; background: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 12%, transparent); pointer-events: none; transition: right .16s ease; }
-.project-task-item:hover .session-row-status, .project-task-item:focus-within .session-row-status, .recent-task-item:hover .session-row-status, .recent-task-item:focus-within .session-row-status { right: 34px; }
-.project-task-item:hover .session-row-unread, .project-task-item:focus-within .session-row-unread, .recent-task-item:hover .session-row-unread, .recent-task-item:focus-within .session-row-unread { right: 37px; }
+.session-row-unread { position: absolute; right: 37px; top: 50%; width: 7px; height: 7px; transform: translateY(-50%); flex: none; border-radius: 50%; background: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 12%, transparent); pointer-events: none; }
 .session-more-action { position: absolute; right: 5px; top: 50%; width: 24px; height: 24px; transform: translateY(-50%); display: grid; place-items: center; border-radius: 6px; color: var(--tree-muted); opacity: 0; pointer-events: none; transition: opacity .12s ease, color .12s ease, background .12s ease; }
 .project-task-item:hover .session-more-action, .project-task-item:focus-within .session-more-action, .recent-task-item:hover .session-more-action, .recent-task-item:focus-within .session-more-action { opacity: 1; pointer-events: auto; }
 .session-more-action:hover, .session-more-action:focus-visible { color: var(--tree-ink); background: color-mix(in srgb, var(--tree-ink) 8%, transparent); }
@@ -274,7 +266,9 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .plan-explanation { margin: 0 0 9px !important; color: var(--muted); line-height: 1.5; }
 .plan-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; color: var(--faint); font-size: 10.5px; }
 .plan-progress > span:first-child { color: var(--muted); font-weight: 620; }
-.plan-progress > span:last-child { font-variant-numeric: tabular-nums; }
+.plan-progress-meta { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.plan-edit-action { height: 23px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 6px; color: var(--muted); font-size: 10px; }
+.plan-edit-action:hover { color: var(--ink); background: var(--hover); }
 .plan-todo-list { list-style: none; margin: 0; padding: 3px; border: 1px solid var(--line-soft); border-radius: 8px; background: color-mix(in srgb, var(--surface) 82%, var(--canvas)); }
 .plan-todo-item { min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; padding: 8px; border-radius: 6px; color: var(--ink); font-size: 12px; line-height: 1.48; }
 .plan-todo-item + .plan-todo-item { margin-top: 2px; }
@@ -314,6 +308,9 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .inline-request input { height: 34px; }
 .inline-request textarea { min-height: 105px; padding-top: 8px; padding-bottom: 8px; resize: vertical; }
 .inline-request input:focus, .inline-request textarea:focus { border-color: var(--focus); }
+.plan-markdown-editor { display: flex; flex-direction: column; gap: 5px; margin-top: 11px; }
+.plan-markdown-editor > span { color: var(--muted); font-size: 10.5px; font-weight: 610; }
+.plan-markdown-editor textarea { min-height: 240px; max-height: min(440px, 48vh); margin-top: 0; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; }
 .inline-request .approval-options { margin: 11px 0 0; }
 .inline-request .approval-options > button > span { min-width: 0; overflow-wrap: anywhere; }
 .inline-request .approval-options > button > svg { flex: none; }
@@ -321,6 +318,7 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .inline-request-actions > button { min-width: 0; height: 31px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .inline-request-actions > button:hover:not(:disabled) { background: var(--hover); }
 .inline-request-actions > .primary-button { border-color: transparent; background: var(--accent); }
+.inline-request-actions > .plan-request-edit { margin-right: auto; }
 
 .composer-wrap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 25px 28px 10px; background: linear-gradient(to bottom, transparent, var(--canvas) 27%); pointer-events: none; }
 .composer-stack { width: min(100%, 780px); margin: 0 auto; pointer-events: auto; }
@@ -568,6 +566,35 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .approval-dialog > input, .approval-dialog > textarea { width: 100%; height: 36px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); outline: 0; padding: 0 10px; margin: 4px 0; }
 .approval-dialog > input:focus, .approval-dialog > textarea:focus { border-color: var(--focus); }
 .agent-plan-card { margin: 6px 0 14px 42px; max-width: 680px; }
+.plan-editor-card { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface) 92%, var(--canvas)); }
+.plan-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.plan-editor-heading > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plan-editor-heading strong { font-size: 12.5px; font-weight: 630; }
+.plan-editor-heading small { color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+.plan-editor-heading kbd { flex: none; padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--faint); font: 9.5px "SFMono-Regular", Consolas, monospace; }
+.plan-editor-explanation { display: flex; flex-direction: column; gap: 5px; margin-top: 11px; }
+.plan-editor-explanation > span { color: var(--muted); font-size: 10px; font-weight: 610; }
+.plan-editor-explanation textarea { width: 100%; min-height: 58px; padding: 8px 9px; resize: vertical; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: var(--surface); color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.45; }
+.plan-editor-explanation textarea:focus, .plan-editor-step select:focus, .plan-editor-step input:focus { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 12%, transparent); }
+.plan-editor-steps { display: flex; flex-direction: column; gap: 4px; margin-top: 9px; }
+.plan-editor-step { min-width: 0; display: grid; grid-template-columns: 22px 105px minmax(120px, 1fr) auto; align-items: center; gap: 6px; padding: 5px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); }
+.plan-editor-index { color: var(--faint); font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
+.plan-editor-step select, .plan-editor-step input { height: 30px; min-width: 0; border: 1px solid var(--line); border-radius: 6px; outline: 0; background: var(--surface-raised); color: var(--ink); font: inherit; font-size: 10.5px; }
+.plan-editor-step select { padding: 0 6px; }
+.plan-editor-step input { padding: 0 8px; }
+.plan-editor-step-actions { display: flex; align-items: center; gap: 1px; }
+.plan-editor-step-actions button { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 6px; color: var(--faint); }
+.plan-editor-step-actions button:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+.plan-editor-step-actions button:last-child:hover:not(:disabled) { color: var(--danger); }
+.plan-editor-step-actions button:disabled { opacity: .3; cursor: default; }
+.plan-add-step { height: 29px; display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; padding: 0 8px; border-radius: 6px; color: var(--muted); font-size: 10.5px; }
+.plan-add-step:hover { color: var(--ink); background: var(--hover); }
+.plan-editor-error { margin: 6px 0 0; color: var(--danger); font-size: 10.5px; }
+.plan-editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 10px; }
+.plan-editor-actions > button { height: 31px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 10.5px; font-weight: 580; }
+.plan-editor-actions > button:hover { color: var(--ink); background: var(--hover); }
+.plan-editor-actions > .primary-button { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.plan-editor-actions > .primary-button:hover { background: var(--accent); color: var(--on-accent); filter: brightness(.96); }
 .danger-link { margin-right: auto; color: var(--danger); display: flex; align-items: center; gap: 5px; padding: 0 5px; }
 .setting-row { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line-soft); }
 .setting-row > span { display: flex; flex-direction: column; }

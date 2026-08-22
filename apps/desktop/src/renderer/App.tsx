@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -17,6 +18,7 @@ import remarkGfm from "remark-gfm";
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
   ArrowUp,
   Bot,
   Box,
@@ -104,7 +106,14 @@ import { applyColorScheme } from "./lib/color-scheme";
 import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
-import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
+import {
+  formatMarkdownPlanRevisionPrompt,
+  formatPlanRevisionPrompt,
+  parseExitPlanPermission,
+  parseStructuredPlan,
+  type PlanStepStatus,
+  type StructuredPlan,
+} from "./lib/plan";
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
@@ -605,6 +614,7 @@ export default function App() {
           options: permissionOptions.map((option) => option.id),
           optionLabels: Object.fromEntries(permissionOptions.map((option) => [option.id, option.label])),
           optionDescriptions: Object.fromEntries(permissionOptions.flatMap((option) => option.description ? [[option.id, option.description]] : [])),
+          request: event.request,
         });
         return;
       }
@@ -1090,6 +1100,44 @@ export default function App() {
       if (!runningSessionIdsRef.current.has(sessionId)) drainFollowUpQueueRef.current(sessionId);
     }
   }, [dispatchPrompt]);
+
+  const applyEditedPlan = useCallback((nextPlan: StructuredPlan): boolean => {
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) {
+      setToast({ message: t("plan.sessionRequired"), type: "error" });
+      return false;
+    }
+    const previousPlan = agentPlan;
+    const editedPlan: PlanState = { ...nextPlan, updatedAt: Date.now() };
+    setAgentPlan(editedPlan);
+    setToast({ message: t("plan.sent"), type: "info" });
+    const prompt = { text: formatPlanRevisionPrompt(nextPlan, locale), images: [] } satisfies QueuedPrompt;
+    const request = runningSessionIdsRef.current.has(sessionId) || interruptingSessionIdsRef.current.has(sessionId)
+      ? interruptAndDispatch(sessionId, prompt)
+      : dispatchPrompt(sessionId, prompt);
+    void request.catch((error) => {
+      setAgentPlan((current) => current === editedPlan ? previousPlan : current);
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+    });
+    return true;
+  }, [agentPlan, dispatchPrompt, interruptAndDispatch, locale, t]);
+
+  const applyEditedMarkdownPlan = useCallback(async (plan: string) => {
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) throw new Error(t("plan.sessionRequired"));
+    const prompt = {
+      text: formatMarkdownPlanRevisionPrompt(plan, locale),
+      images: [],
+    } satisfies QueuedPrompt;
+    if (runningSessionIdsRef.current.has(sessionId) || interruptingSessionIdsRef.current.has(sessionId)) {
+      await interruptAndDispatch(sessionId, prompt);
+    } else {
+      await dispatchPrompt(sessionId, prompt);
+    }
+    setToast({ message: t("plan.sent"), type: "info" });
+  }, [dispatchPrompt, interruptAndDispatch, locale, t]);
 
   const sendMessage = async ({ interrupt = false }: { interrupt?: boolean } = {}) => {
     if (sessionLocked) return;
@@ -1898,7 +1946,7 @@ export default function App() {
                   />
                 ) : (
                   <button className="thread-row recent-task-row" onClick={() => void openSession(session)} title={session.title}>
-                    <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
+                    <span className="thread-copy"><strong>{session.title}</strong></span>
                   </button>
                 )}
                 {runningSessionIds.has(session.path) && (
@@ -1991,7 +2039,7 @@ export default function App() {
                           onPreviewFile={(filePath) => void openFilePreview(filePath)}
                         />
                   ))}
-                  {agentPlan && <section className="agent-plan-card"><PlanTodoList plan={agentPlan} /></section>}
+                  {agentPlan && <EditablePlanCard plan={agentPlan} onSave={applyEditedPlan} />}
                   {running && !uiRequest && !activeAssistantHasWork && (
                     <div className="work-log active" role="status" aria-live="polite">
                       <div className="work-log-summary work-log-status">
@@ -2004,6 +2052,8 @@ export default function App() {
                     <InlineExtensionRequest
                       key={uiRequest.id}
                       request={uiRequest}
+                      tools={messages.flatMap((message) => message.tools)}
+                      onRevisePlan={applyEditedMarkdownPlan}
                       onDone={() => setUiRequest(undefined)}
                       onError={(message) => setToast({ message, type: "error" })}
                     />
@@ -3580,11 +3630,26 @@ function SessionSearchDialog({
   );
 }
 
-function InlineExtensionRequest({ request, onDone, onError }: { request: ExtensionUiRequest; onDone(): void; onError(message: string): void }) {
+function InlineExtensionRequest({
+  request,
+  tools,
+  onRevisePlan,
+  onDone,
+  onError,
+}: {
+  request: ExtensionUiRequest;
+  tools: ToolActivity[];
+  onRevisePlan(plan: string): Promise<void>;
+  onDone(): void;
+  onError(message: string): void;
+}) {
   const { locale, t } = useI18n();
   const [value, setValue] = useState(request.prefill ?? "");
   const [pendingResponse, setPendingResponse] = useState<string>();
-  const plan = request.method === "confirm" ? parseStructuredPlan(request.message) : undefined;
+  const structuredPlan = request.method === "confirm" ? parseStructuredPlan(request.message) : undefined;
+  const exitPlan = parseExitPlanPermission(request.request, tools);
+  const [editingPlan, setEditingPlan] = useState(false);
+  const [editedPlan, setEditedPlan] = useState(exitPlan?.plan ?? "");
   const localizedRequest = localizeExtensionUiRequest(request, locale);
   const respond = async (response: Record<string, unknown>, action: string) => {
     if (pendingResponse) return;
@@ -3597,14 +3662,43 @@ function InlineExtensionRequest({ request, onDone, onError }: { request: Extensi
       onError(cleanError(error instanceof Error ? error.message : String(error)));
     }
   };
+  const revisePlan = async () => {
+    if (pendingResponse || !exitPlan) return;
+    const normalizedPlan = editedPlan.trim();
+    if (!normalizedPlan) {
+      onError(t("plan.emptyRevision"));
+      return;
+    }
+    setPendingResponse("revise-plan");
+    let permissionAnswered = false;
+    try {
+      await window.devinAgent.agent.respondToUi(request.id, { value: exitPlan.rejectOptionId });
+      permissionAnswered = true;
+      onDone();
+      await onRevisePlan(normalizedPlan);
+    } catch (error) {
+      if (!permissionAnswered) setPendingResponse(undefined);
+      onError(cleanError(error instanceof Error ? error.message : String(error)));
+    }
+  };
   const busy = Boolean(pendingResponse);
   return (
     <section className="inline-request" aria-live="polite">
-      <div className="inline-request-icon">{plan ? <ListTodo size={16} /> : <TerminalSquare size={16} />}</div>
+      <div className="inline-request-icon">{structuredPlan || exitPlan ? <ListTodo size={16} /> : <TerminalSquare size={16} />}</div>
       <div className="inline-request-body">
-        <h3>{plan ? t("dialog.updatePlan") : localizedRequest.title ?? (request.method === "confirm" ? t("dialog.approval") : t("dialog.chooseOption"))}</h3>
-        {plan ? <PlanTodoList plan={plan} /> : localizedRequest.message && <p>{localizedRequest.message}</p>}
-        {request.method === "select" && (
+        <h3>{structuredPlan ? t("dialog.updatePlan") : exitPlan ? t("plan.reviewTitle") : localizedRequest.title ?? (request.method === "confirm" ? t("dialog.approval") : t("dialog.chooseOption"))}</h3>
+        {structuredPlan
+          ? <PlanTodoList plan={structuredPlan} />
+          : exitPlan
+            ? <p>{t("plan.reviewDescription")}</p>
+            : localizedRequest.message && <p>{localizedRequest.message}</p>}
+        {editingPlan && exitPlan && (
+          <label className="plan-markdown-editor">
+            <span>{t("plan.markdownContent")}</span>
+            <textarea autoFocus disabled={busy} value={editedPlan} onChange={(event) => setEditedPlan(event.target.value)} />
+          </label>
+        )}
+        {!editingPlan && request.method === "select" && (
           <div className="approval-options">
             {localizedRequest.options.map((option) => (
               <button key={option.value} disabled={busy} onClick={() => void respond({ value: option.value }, `select:${option.value}`)}>
@@ -3613,16 +3707,32 @@ function InlineExtensionRequest({ request, onDone, onError }: { request: Extensi
             ))}
           </div>
         )}
-        {(request.method === "input" || request.method === "editor") && (
+        {!editingPlan && (request.method === "input" || request.method === "editor") && (
           request.method === "editor"
             ? <textarea autoFocus disabled={busy} value={value} onChange={(event) => setValue(event.target.value)} />
             : <input autoFocus disabled={busy} value={value} placeholder={request.placeholder} onChange={(event) => setValue(event.target.value)} />
         )}
         <div className="inline-request-actions">
-          <button disabled={busy} onClick={() => void respond({ cancelled: true }, "cancel")}>
-            {pendingResponse === "cancel" && <LoaderCircle className="spin" size={14} />}{t("common.cancel")}
-          </button>
-          {request.method === "confirm" && (
+          {editingPlan ? (
+            <>
+              <button disabled={busy} onClick={() => { setEditedPlan(exitPlan?.plan ?? ""); setEditingPlan(false); }}>{t("common.cancel")}</button>
+              <button className="primary-button" disabled={busy} onClick={() => void revisePlan()}>
+                {pendingResponse === "revise-plan" && <LoaderCircle className="spin" size={14} />}{t("plan.sendRevision")}
+              </button>
+            </>
+          ) : (
+            <>
+              {exitPlan && (
+                <button className="plan-request-edit" disabled={busy} onClick={() => setEditingPlan(true)}>
+                  <Pencil size={13} />{t("plan.edit")}
+                </button>
+              )}
+              <button disabled={busy} onClick={() => void respond({ cancelled: true }, "cancel")}>
+                {pendingResponse === "cancel" && <LoaderCircle className="spin" size={14} />}{t("common.cancel")}
+              </button>
+            </>
+          )}
+          {!editingPlan && request.method === "confirm" && (
             <>
               <button disabled={busy} onClick={() => void respond({ confirmed: false }, "deny")}>
                 {pendingResponse === "deny" && <LoaderCircle className="spin" size={14} />}{t("common.deny")}
@@ -3632,7 +3742,7 @@ function InlineExtensionRequest({ request, onDone, onError }: { request: Extensi
               </button>
             </>
           )}
-          {(request.method === "input" || request.method === "editor") && (
+          {!editingPlan && (request.method === "input" || request.method === "editor") && (
             <button className="primary-button" disabled={busy} onClick={() => void respond({ value }, "continue")}>
               {pendingResponse === "continue" && <LoaderCircle className="spin" size={14} />}{t("common.continue")}
             </button>
@@ -3643,7 +3753,143 @@ function InlineExtensionRequest({ request, onDone, onError }: { request: Extensi
   );
 }
 
-function PlanTodoList({ plan }: { plan: StructuredPlan }) {
+interface EditablePlanStep {
+  id: string;
+  step: string;
+  status: PlanStepStatus;
+}
+
+function EditablePlanCard({ plan, onSave }: { plan: StructuredPlan; onSave(plan: StructuredPlan): boolean }) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [explanation, setExplanation] = useState("");
+  const [steps, setSteps] = useState<EditablePlanStep[]>([]);
+  const [validationError, setValidationError] = useState<string>();
+
+  const beginEditing = () => {
+    setExplanation(plan.explanation ?? "");
+    setSteps(plan.steps.map((item) => ({ ...item, id: crypto.randomUUID() })));
+    setValidationError(undefined);
+    setEditing(true);
+  };
+  const updateStep = (id: string, update: Partial<Pick<EditablePlanStep, "step" | "status">>) => {
+    setSteps((current) => current.map((item) => item.id === id ? { ...item, ...update } : item));
+    setValidationError(undefined);
+  };
+  const moveStep = (index: number, offset: -1 | 1) => {
+    const target = index + offset;
+    if (target < 0 || target >= steps.length) return;
+    setSteps((current) => {
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+  const save = () => {
+    const normalizedSteps = steps.flatMap((item) => {
+      const step = item.step.trim();
+      return step ? [{ step, status: item.status }] : [];
+    });
+    if (normalizedSteps.length === 0) {
+      setValidationError(t("plan.noSteps"));
+      return;
+    }
+    const normalizedExplanation = explanation.trim();
+    const saved = onSave({
+      ...(normalizedExplanation ? { explanation: normalizedExplanation } : {}),
+      steps: normalizedSteps,
+    });
+    if (saved) setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <section className="agent-plan-card">
+        <PlanTodoList
+          plan={plan}
+          action={(
+            <button type="button" className="plan-edit-action" onClick={beginEditing}>
+              <Pencil size={12} />
+              <span>{t("plan.edit")}</span>
+            </button>
+          )}
+        />
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className="agent-plan-card plan-editor-card"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setEditing(false);
+        }
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          save();
+        }
+      }}
+    >
+      <div className="plan-editor-heading">
+        <div><strong>{t("plan.editTitle")}</strong><small>{t("plan.editDescription")}</small></div>
+        <kbd>⌘↵</kbd>
+      </div>
+      <label className="plan-editor-explanation">
+        <span>{t("plan.explanation")}</span>
+        <textarea
+          value={explanation}
+          onChange={(event) => setExplanation(event.target.value)}
+          placeholder={t("plan.explanationPlaceholder")}
+          rows={2}
+        />
+      </label>
+      <div className="plan-editor-steps">
+        {steps.map((item, index) => (
+          <div className="plan-editor-step" key={item.id}>
+            <span className="plan-editor-index">{index + 1}</span>
+            <select
+              value={item.status}
+              onChange={(event) => updateStep(item.id, { status: event.target.value as PlanStepStatus })}
+              aria-label={t("plan.stepStatus", { number: index + 1 })}
+            >
+              <option value="pending">{t("plan.pending")}</option>
+              <option value="in_progress">{t("plan.inProgress")}</option>
+              <option value="completed">{t("plan.completed")}</option>
+            </select>
+            <input
+              value={item.step}
+              onChange={(event) => updateStep(item.id, { step: event.target.value })}
+              aria-label={t("plan.step", { number: index + 1 })}
+              autoFocus={index === 0}
+            />
+            <div className="plan-editor-step-actions">
+              <button type="button" disabled={index === 0} onClick={() => moveStep(index, -1)} title={t("plan.moveUp")} aria-label={t("plan.moveUp")}><ArrowUp size={13} /></button>
+              <button type="button" disabled={index === steps.length - 1} onClick={() => moveStep(index, 1)} title={t("plan.moveDown")} aria-label={t("plan.moveDown")}><ArrowDown size={13} /></button>
+              <button type="button" onClick={() => setSteps((current) => current.filter((step) => step.id !== item.id))} title={t("plan.removeStep")} aria-label={t("plan.removeStep")}><Trash2 size={13} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="plan-add-step"
+        onClick={() => setSteps((current) => [...current, { id: crypto.randomUUID(), step: "", status: "pending" }])}
+      >
+        <Plus size={13} />
+        <span>{t("plan.addStep")}</span>
+      </button>
+      {validationError && <p className="plan-editor-error" role="alert">{validationError}</p>}
+      <div className="plan-editor-actions">
+        <button type="button" onClick={() => setEditing(false)}>{t("common.cancel")}</button>
+        <button type="button" className="primary-button" onClick={save}>{t("plan.saveAndApply")}</button>
+      </div>
+    </section>
+  );
+}
+
+function PlanTodoList({ plan, action }: { plan: StructuredPlan; action?: ReactNode }) {
   const { t } = useI18n();
   const completed = plan.steps.filter((item) => item.status === "completed").length;
   const statusLabels = {
@@ -3657,7 +3903,10 @@ function PlanTodoList({ plan }: { plan: StructuredPlan }) {
       {plan.explanation && <p className="plan-explanation">{plan.explanation}</p>}
       <div className="plan-progress">
         <span>{t("plan.tasks")}</span>
-        <span>{t("plan.progress", { completed, total: plan.steps.length })}</span>
+        <span className="plan-progress-meta">
+          <span>{t("plan.progress", { completed, total: plan.steps.length })}</span>
+          {action}
+        </span>
       </div>
       <ol className="plan-todo-list">
         {plan.steps.map((item, index) => (
