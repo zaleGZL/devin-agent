@@ -54,9 +54,6 @@ jobs:
           - os: macos-latest
             args: --mac --arm64 --x64 --config.mac.notarize=false
             artifact: macos
-          - os: windows-latest
-            args: --win --x64
-            artifact: windows-x86_64
           - os: ubuntu-22.04
             args: --linux --x64
             artifact: linux-x86_64
@@ -93,7 +90,6 @@ jobs:
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
-            apps/desktop/release/*.exe
             apps/desktop/release/*.deb
             apps/desktop/release/*.rpm
           if-no-files-found: error

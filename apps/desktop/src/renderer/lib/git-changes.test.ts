@@ -26,4 +26,18 @@ describe("sameWorkspaceChanges", () => {
   it("detects render-relevant Git state changes", () => {
     expect(sameWorkspaceChanges(snapshot("2026-08-22T01:00:00Z"), snapshot("2026-08-22T01:00:03Z", "D"))).toBe(false);
   });
+
+  it("detects a changed file count for the toolbar badge", () => {
+    const next = snapshot("2026-08-22T01:00:03Z");
+    next.changes.push({
+      path: "src/new-file.ts",
+      kind: "untracked",
+      indexStatus: "?",
+      workingTreeStatus: "?",
+      staged: false,
+      unstaged: true,
+    });
+
+    expect(sameWorkspaceChanges(snapshot("2026-08-22T01:00:00Z"), next)).toBe(false);
+  });
 });

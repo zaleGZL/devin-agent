@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/devin-agent-brand.png" width="180" alt="Devin Coding Agent">
+  <img src="apps/desktop/src/renderer/assets/devin-agent-logo.png" width="180" alt="Devin Coding Agent">
 </p>
 
 <h1 align="center">Devin Coding Agent</h1>
@@ -87,4 +87,4 @@ and never silently falls back to unisolated execution.
 
 ## License
 
-[MIT](apps/desktop/LICENSE)
+[MIT](LICENSE)

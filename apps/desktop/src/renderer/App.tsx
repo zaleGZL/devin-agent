@@ -211,6 +211,7 @@ const MIN_INSPECTOR_WIDTH = 320;
 const MAX_INSPECTOR_WIDTH = 880;
 const MIN_CONVERSATION_WIDTH = 440;
 const INSPECTOR_RESIZER_WIDTH = 7;
+const WORKSPACE_CHANGES_POLL_INTERVAL_MS = 2_000;
 const ANNOTATION_HIGHLIGHT_NAME = "devin-agent-response-annotations";
 
 function replaceAnnotationHighlights(ranges: Range[]) {
@@ -312,7 +313,9 @@ export default function App() {
   const homeDirectoryRef = useRef<string | undefined>(undefined);
   const workspaceRef = useRef<string | undefined>(undefined);
   const previewRequestRef = useRef(0);
-  const changesRequestRef = useRef(0);
+  const changesSnapshotRequestRef = useRef(0);
+  const changesSnapshotInFlightRef = useRef(false);
+  const changesDiffRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
   const activeSessionRef = useRef<string | undefined>(undefined);
   const launchSessionIdRef = useRef(new URLSearchParams(window.location.search).get("session") ?? undefined);
@@ -546,52 +549,60 @@ export default function App() {
       setWorkspaceDiff(undefined);
       return;
     }
-    const requestId = ++changesRequestRef.current;
+    if (background && changesSnapshotInFlightRef.current) return;
+    const requestId = ++changesSnapshotRequestRef.current;
+    changesSnapshotInFlightRef.current = true;
     if (!background) {
       setChangesLoading(true);
       setChangesError(undefined);
     }
     try {
       const snapshot = await window.devinAgent.workspace.changes(projectPath);
-      if (requestId !== changesRequestRef.current) return;
+      if (requestId !== changesSnapshotRequestRef.current) return;
       setWorkspaceChanges((current) => sameWorkspaceChanges(current, snapshot) ? current : snapshot);
       setChangesError(undefined);
       setSelectedChange((current) => {
         if (!current || snapshot.changes.some((change) => change.path === current.path)) return current;
+        changesDiffRequestRef.current += 1;
         setWorkspaceDiff(undefined);
         return undefined;
       });
     } catch (error) {
-      if (!background && requestId === changesRequestRef.current) {
+      if (!background && requestId === changesSnapshotRequestRef.current) {
         setChangesError(cleanError(error instanceof Error ? error.message : String(error)));
       }
     } finally {
-      if (!background && requestId === changesRequestRef.current) setChangesLoading(false);
+      if (requestId === changesSnapshotRequestRef.current) {
+        changesSnapshotInFlightRef.current = false;
+        if (!background) setChangesLoading(false);
+      }
     }
   }, []);
 
   const openWorkspaceDiff = useCallback(async (change: WorkspaceChange) => {
     const projectPath = workspaceRef.current;
     if (!projectPath) return;
-    const requestId = ++changesRequestRef.current;
+    const requestId = ++changesDiffRequestRef.current;
     setSelectedChange(change);
     setWorkspaceDiff(undefined);
     setChangesLoading(true);
     setChangesError(undefined);
     try {
       const diff = await window.devinAgent.workspace.diff(projectPath, change.path);
-      if (requestId === changesRequestRef.current) setWorkspaceDiff(diff);
+      if (requestId === changesDiffRequestRef.current) setWorkspaceDiff(diff);
     } catch (error) {
-      if (requestId === changesRequestRef.current) {
+      if (requestId === changesDiffRequestRef.current) {
         setChangesError(cleanError(error instanceof Error ? error.message : String(error)));
       }
     } finally {
-      if (requestId === changesRequestRef.current) setChangesLoading(false);
+      if (requestId === changesDiffRequestRef.current) setChangesLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    changesRequestRef.current += 1;
+    changesSnapshotRequestRef.current += 1;
+    changesSnapshotInFlightRef.current = false;
+    changesDiffRequestRef.current += 1;
     setWorkspaceChanges(undefined);
     setSelectedChange(undefined);
     setWorkspaceDiff(undefined);
@@ -600,11 +611,17 @@ export default function App() {
   }, [workspace]);
 
   useEffect(() => {
-    if (!inspectorOpen || inspectorMode !== "changes" || !workspace || selectedChange) return;
-    void refreshWorkspaceChanges();
-    const timer = window.setInterval(() => void refreshWorkspaceChanges({ background: true }), 3_000);
+    if (!workspace) return;
+    // Keep the toolbar badge current even while the Changes inspector is closed.
+    // Identical snapshots are discarded by sameWorkspaceChanges, so polling does
+    // not repaint the inspector or interrupt an in-flight diff request.
+    void refreshWorkspaceChanges({ background: true });
+    const timer = window.setInterval(
+      () => void refreshWorkspaceChanges({ background: true }),
+      WORKSPACE_CHANGES_POLL_INTERVAL_MS,
+    );
     return () => window.clearInterval(timer);
-  }, [inspectorMode, inspectorOpen, refreshWorkspaceChanges, selectedChange, workspace]);
+  }, [refreshWorkspaceChanges, workspace]);
 
   const startAgent = useCallback(async (
     cwd?: string,
@@ -1697,7 +1714,7 @@ export default function App() {
 
   const closePreviewPanel = () => {
     previewRequestRef.current += 1;
-    changesRequestRef.current += 1;
+    changesDiffRequestRef.current += 1;
     setPreviewLoading(false);
     setChangesLoading(false);
     setPreviewError(undefined);
@@ -2534,7 +2551,7 @@ export default function App() {
                   onRefresh={() => selectedChange ? void openWorkspaceDiff(selectedChange) : void refreshWorkspaceChanges()}
                   onSelect={(change) => void openWorkspaceDiff(change)}
                   onBack={() => {
-                    changesRequestRef.current += 1;
+                    changesDiffRequestRef.current += 1;
                     setSelectedChange(undefined);
                     setWorkspaceDiff(undefined);
                     setChangesError(undefined);

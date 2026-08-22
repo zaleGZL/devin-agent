@@ -22,7 +22,12 @@ async function walk(directory) {
       violations.push(`${relative(absolute)}: symlink is not allowed in build input`);
       continue;
     }
-    if (entry.name === "check-independence.mjs" || entry.name.toLowerCase() === "readme.md" || entry.name === "THIRD_PARTY_NOTICES.md") continue;
+    if (
+      entry.name === "AGENTS.md"
+      || entry.name === "check-independence.mjs"
+      || entry.name.toLowerCase() === "readme.md"
+      || entry.name === "THIRD_PARTY_NOTICES.md"
+    ) continue;
     if (entry.isDirectory()) {
       await walk(absolute);
       continue;

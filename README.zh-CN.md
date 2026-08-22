@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/devin-agent-brand.png" width="180" alt="Devin Coding Agent">
+  <img src="apps/desktop/src/renderer/assets/devin-agent-logo.png" width="180" alt="Devin Coding Agent">
 </p>
 
 <h1 align="center">Devin Coding Agent</h1>
@@ -83,4 +83,4 @@ pnpm pack               # 本地未签名打包
 
 ## 许可证
 
-[MIT](apps/desktop/LICENSE)
+[MIT](LICENSE)
