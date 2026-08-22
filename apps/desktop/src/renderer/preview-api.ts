@@ -60,6 +60,14 @@ export function createPreviewApi(): DesktopApi {
         { path: terminalWorkspace, name: "termany", lastOpenedAt: new Date(Date.now() - 7_200_000).toISOString() },
       ],
       forget: async () => [],
+      reorder: async (paths) => paths.flatMap((projectPath) => {
+        const item = [
+          { path: workspace, name: "devin-agent", lastOpenedAt: new Date().toISOString() },
+          { path: docsWorkspace, name: "developer-docs", lastOpenedAt: new Date(Date.now() - 3_600_000).toISOString() },
+          { path: terminalWorkspace, name: "termany", lastOpenedAt: new Date(Date.now() - 7_200_000).toISOString() },
+        ].find((candidate) => candidate.path === projectPath);
+        return item ? [item] : [];
+      }),
     },
     files: {
       validPreviewPaths: async (paths) => paths,
@@ -102,6 +110,7 @@ export function createPreviewApi(): DesktopApi {
         previewSession("3", "Plan the next release", 86_400_000, 6, generalTasksWorkspace),
       ],
       pin: async () => true,
+      reorder: async () => true,
       rename: async (id, title) => previewSession(id, title, 0, 1),
       archive: async () => undefined,
       unarchive: async () => undefined,

@@ -39,6 +39,21 @@ export class RecentWorkspaces {
     return next;
   }
 
+  async reorder(workspacePaths: string[]): Promise<WorkspaceItem[]> {
+    const current = await this.list();
+    const byPath = new Map(current.map((item) => [item.path, item]));
+    const seen = new Set<string>();
+    const next = workspacePaths.flatMap((workspacePath) => {
+      if (seen.has(workspacePath)) return [];
+      seen.add(workspacePath);
+      const item = byPath.get(workspacePath);
+      return item ? [item] : [];
+    });
+    next.push(...current.filter((item) => !seen.has(item.path)));
+    await this.write(next);
+    return next;
+  }
+
   private async write(items: WorkspaceItem[]): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await fs.writeFile(this.file, `${JSON.stringify(items, null, 2)}\n`, { mode: 0o600 });

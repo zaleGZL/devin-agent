@@ -23,6 +23,7 @@ import {
   configureSessionIndex,
   listSessions,
   renameSession,
+  reorderSessions,
   removeSessionSummary,
   setSessionPinned,
   unarchiveSession,
@@ -30,8 +31,10 @@ import {
 } from "./session-index";
 import {
   buildAgentSnapshot,
+  isRuntimePromptRunning,
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
+  resolveRuntimeCommandSessionId,
   resolveRuntimeSessionOpenAction,
 } from "./runtime-adapter";
 import {
@@ -78,8 +81,11 @@ let mainWindow: BrowserWindow | undefined;
 let agentHost: RuntimeHost | undefined;
 let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
-let activeAgentCwd: string | undefined;
 let devinCliUpdatePromise: Promise<DevinCliUpdateStatus> | undefined;
+const sessionWindows = new Map<string, BrowserWindow>();
+const auxiliaryWindowIds = new Set<number>();
+const rendererSessionIds = new Map<number, string>();
+const rendererCwds = new Map<number, string>();
 const previewFiles = new Map<string, { filePath: string; rootPath: string }>();
 let activePreviewId: string | undefined;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -104,10 +110,11 @@ protocol.registerSchemesAsPrivileged([{
 
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  const target = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!target) return;
+  if (target.isMinimized()) target.restore();
+  target.show();
+  target.focus();
 });
 
 app.setName("Devin Agent");
@@ -145,7 +152,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
             if (event.sessionId) advertisedCommands.set(event.sessionId, commands);
           }
         }
-        mainWindow?.webContents.send("agent:event", {
+        broadcastToRenderers("agent:event", {
           type: "acp_update",
           sessionId: event.sessionId,
           update: event.update,
@@ -153,8 +160,8 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           timestamp: event.receivedAt,
         });
       },
-      onStateChange: (state: string, error?: Error) => mainWindow?.webContents.send("agent:event", { type: "agent_state", state, ...(error ? { error: safeError(error) } : {}) }),
-      onDiagnostic: (diagnostic: unknown) => mainWindow?.webContents.send("agent:event", { type: "agent_diagnostic", diagnostic }),
+      onStateChange: (state: string, error?: Error) => broadcastToRenderers("agent:event", { type: "agent_state", state, ...(error ? { error: safeError(error) } : {}) }),
+      onDiagnostic: (diagnostic: unknown) => broadcastToRenderers("agent:event", { type: "agent_diagnostic", diagnostic }),
       openExternal: (url: string) => shell.openExternal(url),
       onPermissionRequest: async (request: unknown) => {
         const requestRecord = request && typeof request === "object" ? request as Record<string, unknown> : {};
@@ -165,7 +172,9 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
             return { id: String(value.optionId ?? value.id ?? ""), label: String(value.label ?? value.name ?? value.optionId ?? value.id ?? ""), description: typeof value.description === "string" ? value.description : undefined };
           }).filter((option) => option.id)
           : [];
-        mainWindow?.webContents.send("agent:event", { type: "permission_request", id, title: "Devin needs permission", message: "Choose an action for this request.", options, request: requestRecord });
+        const requestSessionId = typeof requestRecord.sessionId === "string" ? requestRecord.sessionId : undefined;
+        const targetWindow = requestSessionId ? windowForSession(requestSessionId) : undefined;
+        (targetWindow ?? BrowserWindow.getFocusedWindow() ?? mainWindow)?.webContents.send("agent:event", { type: "permission_request", id, title: "Devin needs permission", message: "Choose an action for this request.", options, request: requestRecord });
         return new Promise((resolve) => {
           permissionRequests.set(id, { allowed: new Set(options.map((option) => option.id)), resolve });
           setTimeout(() => {
@@ -224,14 +233,17 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
       async command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T> {
         const payload = data ?? {};
         if (type === "prompt" || type === "follow_up") {
-          const sessionId = raw.sessionId as string | null;
+          const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
           if (!sessionId) throw new Error("No active Devin session");
           const prompt = typeof payload.message === "string" ? payload.message : typeof payload.prompt === "string" ? payload.prompt : "";
           const images = Array.isArray(payload.images) ? payload.images : [];
           const content = [{ type: "text", text: prompt }, ...images.filter((image): image is Record<string, unknown> => Boolean(image && typeof image === "object"))];
           if (type === "follow_up") {
-            await raw.cancel?.();
-            await waitUntil(() => raw.isPromptRunning !== true, 5_000);
+            await raw.cancel?.(sessionId);
+            await waitUntil(
+              () => !isRuntimePromptRunning(raw.runningSessionIds, sessionId, raw.sessionId, raw.isPromptRunning),
+              5_000,
+            );
           }
           const existingSummary = (await listSessions()).find((session) => session.id === sessionId);
           if (existingSummary) {
@@ -244,21 +256,26 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
               messageCount: (existingSummary.messageCount ?? 0) + 1,
             });
           }
-          mainWindow?.webContents.send("agent:event", { type: "agent_start", sessionId, timestamp: Date.now() });
+          broadcastToRenderers("agent:event", { type: "agent_start", sessionId, timestamp: Date.now() });
           try {
             return await raw.prompt?.(content, sessionId) as T;
           } finally {
-            mainWindow?.webContents.send("agent:event", { type: "agent_settled", sessionId, timestamp: Date.now() });
+            broadcastToRenderers("agent:event", { type: "agent_settled", sessionId, timestamp: Date.now() });
           }
         }
-        if (type === "cancel" || type === "abort") return await raw.cancel?.() as T;
-        if (type === "set_mode") return await raw.setMode?.(String(payload.modeId ?? payload.value)) as T;
-        if (type === "set_config_option") return await raw.setConfigOption?.(String(payload.configId), payload.value as string | boolean) as T;
-        if (type === "set_model") return await raw.setConfigOption?.("model", String(payload.modelId ?? payload.value)) as T;
+        if (type === "cancel" || type === "abort") {
+          return await raw.cancel?.(resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
+        }
+        if (type === "set_mode") return await raw.setMode?.(String(payload.modeId ?? payload.value), resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
+        if (type === "set_config_option") return await raw.setConfigOption?.(String(payload.configId), payload.value as string | boolean, resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
+        if (type === "set_model") return await raw.setConfigOption?.("model", String(payload.modelId ?? payload.value), resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
         if (type === "new_session") return await raw.newSession?.(typeof payload.cwd === "string" ? payload.cwd : process.cwd()) as T;
         if (type === "get_state") return latestSnapshot?.state as T;
         if (type === "get_available_models") return (latestSnapshot?.models ?? []) as T;
-        if (type === "get_commands") return [...(advertisedCommands.get(raw.sessionId) ?? [])] as T;
+        if (type === "get_commands") {
+          const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
+          return [...(sessionId ? advertisedCommands.get(sessionId) ?? [] : [])] as T;
+        }
         if (type === "reconnect") return await raw.restart?.() as T;
         if (type === "handoff") {
           if (!advertisedCommands.get(raw.sessionId)?.has("handoff")) throw new Error("当前 Devin session 未广告 /handoff");
@@ -288,14 +305,37 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
   }
 }
 
-function createWindow(): void {
+function rendererWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+}
+
+function broadcastToRenderers(channel: string, payload: unknown): void {
+  for (const window of rendererWindows()) window.webContents.send(channel, payload);
+}
+
+function windowForSession(sessionId: string): BrowserWindow | undefined {
+  return rendererWindows().find((window) => rendererSessionIds.get(window.webContents.id) === sessionId);
+}
+
+function windowForSender(senderId: number): BrowserWindow | undefined {
+  return rendererWindows().find((window) => window.webContents.id === senderId);
+}
+
+function createWindow(options: { sessionId?: string; title?: string } = {}): BrowserWindow {
   const { workArea } = screen.getPrimaryDisplay();
   const windowWidth = Math.floor(workArea.width * 0.8);
   const windowHeight = Math.floor(workArea.height * 0.9);
-  const windowX = workArea.x + Math.floor((workArea.width - windowWidth) / 2);
-  const windowY = workArea.y + Math.floor((workArea.height - windowHeight) / 2);
+  const centeredX = workArea.x + Math.floor((workArea.width - windowWidth) / 2);
+  const centeredY = workArea.y + Math.floor((workArea.height - windowHeight) / 2);
+  const focusedBounds = options.sessionId ? BrowserWindow.getFocusedWindow()?.getBounds() : undefined;
+  const windowX = focusedBounds
+    ? Math.min(workArea.x + workArea.width - windowWidth, Math.max(workArea.x, focusedBounds.x + 24))
+    : centeredX;
+  const windowY = focusedBounds
+    ? Math.min(workArea.y + workArea.height - windowHeight, Math.max(workArea.y, focusedBounds.y + 24))
+    : centeredY;
 
-  mainWindow = new BrowserWindow({
+  const browserWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
     x: windowX,
@@ -312,28 +352,46 @@ function createWindow(): void {
       ...SECURE_RENDERER_WEB_PREFERENCES,
     },
   });
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = browserWindow;
+  if (options.sessionId) sessionWindows.set(options.sessionId, browserWindow);
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow?.setPosition(windowX, windowY);
-    mainWindow?.show();
+  browserWindow.once("ready-to-show", () => {
+    if (browserWindow.isDestroyed()) return;
+    browserWindow.setPosition(windowX, windowY);
+    if (options.title) browserWindow.setTitle(`${options.title} — Devin Agent`);
+    browserWindow.show();
   });
-  mainWindow.on("closed", () => {
-    mainWindow = undefined;
-    void agentHost?.stop?.();
+  const webContentsId = browserWindow.webContents.id;
+  if (options.sessionId) auxiliaryWindowIds.add(webContentsId);
+  browserWindow.on("closed", () => {
+    auxiliaryWindowIds.delete(webContentsId);
+    rendererSessionIds.delete(webContentsId);
+    rendererCwds.delete(webContentsId);
+    if (options.sessionId && sessionWindows.get(options.sessionId) === browserWindow) sessionWindows.delete(options.sessionId);
+    if (mainWindow === browserWindow) mainWindow = rendererWindows()[0];
+    if (rendererWindows().length === 0) void agentHost?.stop?.();
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  browserWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (url === mainWindow?.webContents.getURL()) return;
+  browserWindow.webContents.on("will-navigate", (event, url) => {
+    if (url === browserWindow.webContents.getURL()) return;
     event.preventDefault();
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
   });
 
   const devServer = process.env.VITE_DEV_SERVER_URL;
-  if (devServer) void mainWindow.loadURL(devServer);
-  else void mainWindow.loadFile(path.join(currentDirectory, "../../dist/index.html"));
+  if (devServer) {
+    const url = new URL(devServer);
+    if (options.sessionId) url.searchParams.set("session", options.sessionId);
+    void browserWindow.loadURL(url.toString());
+  } else {
+    void browserWindow.loadFile(path.join(currentDirectory, "../../dist/index.html"), options.sessionId
+      ? { query: { session: options.sessionId } }
+      : undefined);
+  }
+  return browserWindow;
 }
 
 function installMenu(): void {
@@ -356,7 +414,7 @@ function installMenu(): void {
 }
 
 function sendAppCommand(command: string): void {
-  mainWindow?.webContents.send("app:command", command);
+  (BrowserWindow.getFocusedWindow() ?? mainWindow)?.webContents.send("app:command", command);
 }
 
 function registerIpc(): void {
@@ -389,8 +447,9 @@ function registerIpc(): void {
     agentHost = await createRuntimeHost();
     return getDevinProviderStatus();
   });
-  ipcMain.handle("settings:choose-devin-cli-path", async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
+  ipcMain.handle("settings:choose-devin-cli-path", async (ipcEvent) => {
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, {
       title: "Choose the Devin CLI executable",
       properties: ["openFile"],
       buttonLabel: "Use Devin CLI",
@@ -417,24 +476,29 @@ function registerIpc(): void {
     }
   });
 
-  ipcMain.handle("workspace:choose", async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, { title: "Open a workspace", properties: ["openDirectory", "createDirectory"], buttonLabel: "Open" });
+  ipcMain.handle("workspace:choose", async (ipcEvent) => {
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, { title: "Open a workspace", properties: ["openDirectory", "createDirectory"], buttonLabel: "Open" });
     if (result.canceled || !result.filePaths[0]) return null;
     await recentWorkspaces.touch(result.filePaths[0]);
     return path.resolve(result.filePaths[0]);
   });
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
   ipcMain.handle("workspace:forget", (_event, value: unknown) => recentWorkspaces.forget(expectString(value, "workspace path", 4_096)));
+  ipcMain.handle("workspace:reorder", (_event, value: unknown) => recentWorkspaces.reorder(expectStringList(value, "workspace paths", 12, 4_096)));
 
-  ipcMain.handle("files:choose-preview", async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, { title: "Preview a file", properties: ["openFile"], buttonLabel: "Preview" });
+  ipcMain.handle("files:choose-preview", async (ipcEvent) => {
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, { title: "Preview a file", properties: ["openFile"], buttonLabel: "Preview" });
     if (result.canceled || !result.filePaths[0]) return null;
     const selected = await fsp.realpath(result.filePaths[0]);
+    const activeAgentCwd = rendererCwds.get(ipcEvent.sender.id);
     const workspaceRoot = activeAgentCwd ? await safeRealpath(activeAgentCwd) : undefined;
     const rootPath = workspaceRoot && isPathInside(workspaceRoot, selected) ? workspaceRoot : path.dirname(selected);
     return createFilePreview(selected, rootPath);
   });
-  ipcMain.handle("files:valid-preview-paths", async (_event, value: unknown) => {
+  ipcMain.handle("files:valid-preview-paths", async (ipcEvent, value: unknown) => {
+    const activeAgentCwd = rendererCwds.get(ipcEvent.sender.id);
     if (!activeAgentCwd || !Array.isArray(value)) return [];
     const rootPath = await safeRealpath(activeAgentCwd);
     if (!rootPath) return [];
@@ -449,7 +513,8 @@ function registerIpc(): void {
     }));
     return valid.filter((item): item is string => Boolean(item));
   });
-  ipcMain.handle("files:preview", async (_event, value: unknown) => {
+  ipcMain.handle("files:preview", async (ipcEvent, value: unknown) => {
+    const activeAgentCwd = rendererCwds.get(ipcEvent.sender.id);
     if (!activeAgentCwd) throw new Error("Open a workspace before previewing files");
     const rootPath = await safeRealpath(activeAgentCwd);
     if (!rootPath) throw new Error("The workspace is no longer available");
@@ -463,7 +528,7 @@ function registerIpc(): void {
     if (error) throw new Error(error);
   });
 
-  ipcMain.handle("sessions:list", async (_event, cwd: unknown) => {
+  ipcMain.handle("sessions:list", async (ipcEvent, cwd: unknown) => {
     const requestedCwd = cwd === undefined ? undefined : expectString(cwd, "cwd", 4_096);
     try {
       const remote = await agentHost?.listSessions?.(requestedCwd);
@@ -472,14 +537,28 @@ function registerIpc(): void {
         return listSessions(requestedCwd);
       }
     } catch (error) {
-      mainWindow?.webContents.send("agent:error", safeError(error));
+      ipcEvent.sender.send("agent:error", safeError(error));
     }
     return listSessions(requestedCwd);
   });
   ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectString(id, "session id", 200), expectBoolean(pinned, "pinned")));
+  ipcMain.handle("sessions:reorder", (_event, ids: unknown) => reorderSessions(expectStringList(ids, "session ids", 500, 200)));
   ipcMain.handle("sessions:rename", (_event, id: unknown, title: unknown) => renameSession(expectString(id, "session id", 200), expectString(title, "session title", 120)));
   ipcMain.handle("sessions:archive", (_event, id: unknown) => archiveSession(expectString(id, "session id", 200)));
   ipcMain.handle("sessions:unarchive", (_event, id: unknown) => unarchiveSession(expectString(id, "session id", 200)));
+  ipcMain.handle("sessions:open-in-new-window", async (_event, id: unknown) => {
+    const sessionId = expectString(id, "session id", 200);
+    const session = (await listSessions()).find((candidate) => candidate.id === sessionId);
+    if (!session) throw new Error("This Devin session is no longer available");
+    const existing = sessionWindows.get(sessionId);
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
+      return;
+    }
+    createWindow({ sessionId, title: session.title });
+  });
   ipcMain.handle("sessions:delete", async (_event, id: unknown) => {
     const sessionId = expectString(id, "session id", 200);
     if (!agentHost?.deleteSession) throw new Error("当前 Devin ACP 未提供 session/delete");
@@ -501,12 +580,22 @@ function registerIpc(): void {
     prompt.resolve(expectString(value, "auth response", 16_384));
   });
 
-  ipcMain.handle("agent:start", async (_event, value: unknown) => {
+  ipcMain.handle("agent:start", async (ipcEvent, value: unknown) => {
     const options = expectAgentStartOptions(value);
-    activeAgentCwd = options.cwd;
+    if (options.cwd) rendererCwds.set(ipcEvent.sender.id, options.cwd);
     if (options.project && options.cwd) await recentWorkspaces.touch(options.cwd);
     if (!agentHost?.start) throw new Error("Devin ACP runtime is not available. Install Devin CLI and restart the app.");
     const snapshot = await agentHost.start(options);
+    if (snapshot.sessionId) {
+      rendererSessionIds.set(ipcEvent.sender.id, snapshot.sessionId);
+      if (auxiliaryWindowIds.has(ipcEvent.sender.id)) {
+        const senderWindow = windowForSender(ipcEvent.sender.id);
+        for (const [sessionId, window] of sessionWindows) {
+          if (window === senderWindow) sessionWindows.delete(sessionId);
+        }
+        if (senderWindow) sessionWindows.set(snapshot.sessionId, senderWindow);
+      }
+    }
     if (snapshot.sessionId && options.cwd) {
       const now = new Date().toISOString();
       const existing = (await listSessions()).find((session) => session.id === snapshot.sessionId);
@@ -522,14 +611,21 @@ function registerIpc(): void {
         ...(snapshotModel?.id ? { model: snapshotModel.id } : {}),
         ...(snapshot.locked !== undefined ? { locked: snapshot.locked } : {}),
       });
+      if (auxiliaryWindowIds.has(ipcEvent.sender.id)) {
+        windowForSender(ipcEvent.sender.id)?.setTitle(`${existing?.title ?? "New task"} — Devin Agent`);
+      }
     }
     return snapshot;
   });
   ipcMain.handle("agent:stop", () => agentHost?.stop?.());
-  ipcMain.handle("agent:command", (_event, type: unknown, data: unknown) => {
+  ipcMain.handle("agent:command", (ipcEvent, type: unknown, data: unknown) => {
     const command = expectString(type, "agent command", 100);
     if (!ALLOWED_AGENT_COMMANDS.has(command)) throw new Error(`Unsupported agent command: ${command}`);
-    const payload = data === undefined ? undefined : expectRecord(data, "agent command data");
+    const suppliedPayload = data === undefined ? undefined : expectRecord(data, "agent command data");
+    const rendererSessionId = rendererSessionIds.get(ipcEvent.sender.id);
+    const payload = rendererSessionId && typeof suppliedPayload?.sessionId !== "string"
+      ? { ...suppliedPayload, sessionId: rendererSessionId }
+      : suppliedPayload;
     if (!agentHost?.request && !agentHost?.command) throw new Error("Devin ACP runtime is not available");
     return agentHost.request?.(command, payload) ?? agentHost.command?.(command, payload);
   });
@@ -710,6 +806,10 @@ function expectProfile(value: unknown): UserProfile {
 function expectModelIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 32) throw new Error("Invalid pinned model ids");
   return value.map((entry) => expectString(entry, "model id", 200));
+}
+function expectStringList(value: unknown, name: string, maxItems: number, maxItemLength: number): string[] {
+  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`Invalid ${name}`);
+  return value.map((entry) => expectString(entry, name, maxItemLength));
 }
 function expectAgentStartOptions(value: unknown): AgentStartOptions {
   const data = expectRecord(value, "agent options");

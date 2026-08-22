@@ -81,14 +81,15 @@ export function splitAssistantTurn(messages: ChatMessage[], active = false): { w
     }
   });
 
-  let lastToolIndex = -1;
-  timeline.forEach((entry, index) => {
-    if (entry.item.type === "tool") lastToolIndex = index;
-  });
   const work: TurnWorkEntry[] = [];
   const responses: TurnResponseEntry[] = [];
-  timeline.forEach((entry, index) => {
-    if (!active && entry.item.type === "text" && index > lastToolIndex) {
+  timeline.forEach((entry) => {
+    // A restored Devin transcript can contain tool updates after an assistant
+    // message. Treating only text after the final tool as a response hides
+    // legitimate history inside the collapsed work log. Once a turn is
+    // settled, every assistant text segment is user-visible conversation;
+    // only thoughts and tool activity belong in the collapsible log.
+    if (!active && entry.item.type === "text") {
       responses.push({ key: entry.key, text: entry.item.text, streaming: false });
     } else {
       work.push(entry);

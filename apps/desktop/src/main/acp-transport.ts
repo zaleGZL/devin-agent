@@ -236,6 +236,7 @@ export class AcpTransport {
       const operation = this.connection.agent.request(method, params, {
         cancellationSignal: cancellationController.signal,
       });
+      if (timeoutMs <= 0) return (await operation) as TResult;
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           cancellationController.abort();

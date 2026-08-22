@@ -41,6 +41,11 @@ class MockAcpProcess extends EventEmitter implements SpawnedProcessLike {
           },
         })}\n`);
       }
+      if (request.method === "fixture/long-lived") {
+        setTimeout(() => {
+          this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { completed: true } })}\n`);
+        }, 30);
+      }
     }
   }
 }
@@ -73,6 +78,18 @@ describe("AcpTransport", () => {
     });
     await transport.start();
     await expect(transport.request("fixture/timeout", {}, { timeoutMs: 20 })).rejects.toMatchObject({ code: "timeout" });
+    await transport.stop();
+  });
+
+  it("allows long-lived requests to opt out of the transport timeout", async () => {
+    const process = new MockAcpProcess({});
+    const transport = new AcpTransport("/tmp/devin", {
+      spawn: () => process,
+      timeoutMs: 20,
+    });
+    await transport.start();
+    await expect(transport.request("fixture/long-lived", {}, { timeoutMs: 0 }))
+      .resolves.toEqual({ completed: true });
     await transport.stop();
   });
 

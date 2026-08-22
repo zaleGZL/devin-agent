@@ -40,6 +40,8 @@ export interface SessionSummary {
   messageCount?: number;
   preview?: string;
   pinned?: boolean;
+  /** App-local order within the current sidebar group. */
+  sidebarOrder?: number;
   archived?: boolean;
   locked?: boolean;
   additionalDirectories?: string[];
@@ -182,6 +184,7 @@ export interface DesktopApi {
     choose(): Promise<string | null>;
     recent(): Promise<WorkspaceItem[]>;
     forget(path: string): Promise<WorkspaceItem[]>;
+    reorder(paths: string[]): Promise<WorkspaceItem[]>;
   };
   files: {
     choosePreview(): Promise<FilePreview | null>;
@@ -193,9 +196,11 @@ export interface DesktopApi {
     list(cwd?: string): Promise<SessionSummary[]>;
     delete?(id: string): Promise<void>;
     pin?(id: string, pinned: boolean): Promise<boolean>;
+    reorder?(ids: string[]): Promise<boolean>;
     rename?(id: string, title: string): Promise<SessionSummary | undefined>;
     archive?(id: string): Promise<SessionSummary | undefined>;
     unarchive?(id: string): Promise<SessionSummary | undefined>;
+    openInNewWindow?(id: string): Promise<void>;
   };
   auth: {
     status(): Promise<ProviderStatus[]>;

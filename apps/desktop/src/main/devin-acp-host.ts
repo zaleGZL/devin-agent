@@ -140,6 +140,7 @@ export class DevinAcpHost {
   private activeSession: DevinSessionState | null = null;
   private readonly sessions = new Map<string, DevinSessionState>();
   private pendingSessionId: string | null = null;
+  private pendingNewSession = false;
   private readonly promptRunningSessionIds = new Set<string>();
   private generation = 0;
   private stopping = false;
@@ -286,10 +287,17 @@ export class DevinAcpHost {
     if (directories?.length && this.hasSessionCapability("additionalDirectories")) {
       params.additionalDirectories = directories;
     }
-    const result = await this.request<JsonObject>("session/new", params);
-    const session = this.sessionFromResult(result, cwd);
-    this.setActiveSession(session);
-    return session;
+    this.pendingNewSession = true;
+    this.pendingSessionId = null;
+    try {
+      const result = await this.request<JsonObject>("session/new", params);
+      const session = this.sessionFromResult(result, cwd);
+      this.setActiveSession(session);
+      return session;
+    } finally {
+      this.pendingNewSession = false;
+      this.pendingSessionId = null;
+    }
   }
 
   async loadSession(
@@ -438,7 +446,7 @@ export class DevinAcpHost {
       return await this.request<JsonObject>(
         "session/prompt",
         { sessionId, prompt: content },
-        requestOptions,
+        { timeoutMs: 0, ...requestOptions },
       );
     } catch (error) {
       const normalized = normalizeHostError(error, "发送 Devin prompt 失败");
@@ -606,6 +614,7 @@ export class DevinAcpHost {
     if (method === "session/update") {
       const envelope = asJsonObject(params) as SessionUpdateEnvelope | null;
       const sessionId = asString(envelope?.sessionId);
+      if (sessionId && this.pendingNewSession && !this.pendingSessionId) this.pendingSessionId = sessionId;
       const expectedSessionId = this.pendingSessionId;
       if (sessionId && !this.sessions.has(sessionId) && sessionId !== expectedSessionId) {
         this.emitDiagnostic({ code: "stale-event", message: "忽略来自未知 session 的事件", details: { sessionId }, generation });
@@ -631,6 +640,7 @@ export class DevinAcpHost {
     }
     const request = (asJsonObject(params) ?? {}) as PermissionRequest;
     const sessionId = asString(request.sessionId);
+    if (sessionId && this.pendingNewSession && !this.pendingSessionId) this.pendingSessionId = sessionId;
     if (generation !== this.generation || (sessionId && !this.sessions.has(sessionId) && sessionId !== this.pendingSessionId)) {
       return { outcome: { outcome: "cancelled" } };
     }

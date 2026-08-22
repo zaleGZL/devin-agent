@@ -37,6 +37,7 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     choose: () => ipcRenderer.invoke("workspace:choose"),
     recent: () => ipcRenderer.invoke("workspace:recent"),
     forget: (workspacePath) => ipcRenderer.invoke("workspace:forget", workspacePath),
+    reorder: (workspacePaths) => ipcRenderer.invoke("workspace:reorder", workspacePaths),
   },
   files: {
     choosePreview: () => ipcRenderer.invoke("files:choose-preview"),
@@ -48,9 +49,11 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     list: (cwd) => ipcRenderer.invoke("sessions:list", cwd),
     delete: (id) => ipcRenderer.invoke("sessions:delete", id),
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
+    reorder: (ids) => ipcRenderer.invoke("sessions:reorder", ids),
     rename: (id, title) => ipcRenderer.invoke("sessions:rename", id, title),
     archive: (id) => ipcRenderer.invoke("sessions:archive", id),
     unarchive: (id) => ipcRenderer.invoke("sessions:unarchive", id),
+    openInNewWindow: (id) => ipcRenderer.invoke("sessions:open-in-new-window", id),
   },
   auth: {
     status: () => ipcRenderer.invoke("auth:status"),

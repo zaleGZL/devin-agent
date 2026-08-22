@@ -6,6 +6,7 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -25,6 +26,8 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  CornerDownLeft,
+  CornerDownRight,
   Ellipsis,
   ExternalLink,
   Eye,
@@ -36,7 +39,7 @@ import {
   Gauge,
   GitBranch,
   GitFork,
-  Globe2,
+  GripVertical,
   ImagePlus,
   Info,
   Languages,
@@ -110,6 +113,22 @@ import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import { partitionSidebarSessions } from "./lib/sidebar-sessions";
 import { clearSessionUnread, markBackgroundSessionUnread } from "./lib/session-attention";
+import {
+  enqueueFollowUp,
+  moveFollowUp,
+  removeFollowUp,
+  restoreFollowUp,
+  takeFollowUp,
+  updateFollowUp,
+  type FollowUpItem,
+} from "./lib/follow-up";
+import {
+  compareSidebarSessions,
+  moveByKey,
+  orderedSessionIdsForGroup,
+  reorderSessionsWithinGroup,
+  type SidebarSessionGroupKey,
+} from "./lib/sidebar-order";
 import type { DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
 
@@ -117,17 +136,33 @@ interface Attachment extends ChatImage {
   name: string;
 }
 
+interface QueuedPrompt {
+  text: string;
+  images: ChatImage[];
+}
+
 interface PreviewImage extends ChatImage {
   alt: string;
 }
 
+type SidebarDragState =
+  | { kind: "project"; id: string }
+  | { kind: "session"; id: string; groupKey: SidebarSessionGroupKey };
+
+type SidebarDragSnapshot =
+  | { kind: "project"; id: string; original: WorkspaceItem[] }
+  | { kind: "session"; id: string; groupKey: SidebarSessionGroupKey; original: SessionSummary[] };
+
 const PROJECT_TASK_PREVIEW_COUNT = 4;
 const SESSION_MENU_WIDTH = 176;
-const SESSION_MENU_HEIGHT = 126;
+const SESSION_MENU_HEIGHT = 160;
+const PROJECT_MENU_WIDTH = 176;
+const PROJECT_MENU_HEIGHT = 44;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-const DEVIN_WEBSITE_URL = "https://devin.ai";
-const DEVIN_GITHUB_URL = "https://github.com/devin-ai";
+const DEVIN_GITHUB_URL = "https://github.com/zaleGZL/devin-agent";
+const DEVIN_GITHUB_DISPLAY_URL = "github.com/zaleGZL/devin-agent";
 const DEVIN_ISSUES_URL = `${DEVIN_GITHUB_URL}/issues`;
+const DEVIN_ISSUES_DISPLAY_URL = `${DEVIN_GITHUB_DISPLAY_URL}/issues`;
 // ACP does not currently provide enough verified usage/cost data to make the
 // Conversation context card accurate. Keep the implementation dormant until
 // the runtime advertises a complete, stable data source.
@@ -174,6 +209,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [followUpQueues, setFollowUpQueues] = useState<Map<string, FollowUpItem<QueuedPrompt>[]>>(() => new Map());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [permissionUpdating, setPermissionUpdating] = useState(false);
@@ -194,8 +230,12 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [archiveNotice, setArchiveNotice] = useState<SessionSummary>();
   const [sessionMenu, setSessionMenu] = useState<{ sessionId: string; left: number; top: number }>();
+  const [projectMenu, setProjectMenu] = useState<{ path: string; left: number; top: number }>();
+  const [projectPendingRemoval, setProjectPendingRemoval] = useState<WorkspaceItem>();
+  const [projectRemovalBusy, setProjectRemovalBusy] = useState(false);
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [sessionRenameDraft, setSessionRenameDraft] = useState("");
+  const [sidebarDrag, setSidebarDrag] = useState<SidebarDragState>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
@@ -211,13 +251,22 @@ export default function App() {
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
   const activeSessionRef = useRef<string | undefined>(undefined);
+  const launchSessionIdRef = useRef(new URLSearchParams(window.location.search).get("session") ?? undefined);
   const modelRef = useRef("");
   const availableModelsRef = useRef<AgentSnapshot["models"]>([]);
   const newSessionModelIdRef = useRef<string | null>(null);
   const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
   const runningSessionIdsRef = useRef(new Set<string>());
+  const followUpQueuesRef = useRef(new Map<string, FollowUpItem<QueuedPrompt>[]>());
+  const interruptingSessionIdsRef = useRef(new Set<string>());
+  const drainingFollowUpSessionIdsRef = useRef(new Set<string>());
+  const drainFollowUpQueueRef = useRef<(sessionId: string) => void>(() => undefined);
   const unreadSessionIdsRef = useRef(new Set<string>());
+  const workspacesRef = useRef<WorkspaceItem[]>([]);
+  const sessionsRef = useRef<SessionSummary[]>([]);
+  const sidebarDragRef = useRef<SidebarDragSnapshot | undefined>(undefined);
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
+  const activeFollowUps = activeSession ? followUpQueues.get(activeSession) ?? [] : [];
 
   useEffect(() => {
     modelRef.current = model;
@@ -226,6 +275,14 @@ export default function App() {
   useEffect(() => {
     availableModelsRef.current = availableModels;
   }, [availableModels]);
+
+  useEffect(() => {
+    workspacesRef.current = workspaces;
+  }, [workspaces]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   useEffect(() => {
     if (!renamingSessionId) return;
@@ -260,6 +317,15 @@ export default function App() {
     else next.delete(sessionId);
     runningSessionIdsRef.current = next;
     setRunningSessionIds(next);
+  }, []);
+
+  const setFollowUpQueue = useCallback((sessionId: string, update: (queue: FollowUpItem<QueuedPrompt>[]) => FollowUpItem<QueuedPrompt>[]) => {
+    const nextQueue = update(followUpQueuesRef.current.get(sessionId) ?? []);
+    const nextQueues = new Map(followUpQueuesRef.current);
+    if (nextQueue.length > 0) nextQueues.set(sessionId, nextQueue);
+    else nextQueues.delete(sessionId);
+    followUpQueuesRef.current = nextQueues;
+    setFollowUpQueues(nextQueues);
   }, []);
 
   const updateSessionMessages = useCallback((sessionId: string, update: (messages: ChatMessage[]) => ChatMessage[]) => {
@@ -447,7 +513,10 @@ export default function App() {
         const initialModelId = storedNewSessionModelId ?? configured.defaultModel;
         if (initialModelId) setModel(initialModelId);
       }
-      const selectedSession = allSessions.find((session) => !session.archived);
+      const launchSessionId = launchSessionIdRef.current;
+      const selectedSession = (launchSessionId
+        ? allSessions.find((session) => session.id === launchSessionId)
+        : undefined) ?? allSessions.find((session) => !session.archived);
       const selectedProject = selectedSession
         ? recentItems.find((item) => item.path === selectedSession.cwd)
         : undefined;
@@ -501,6 +570,13 @@ export default function App() {
         if (!eventSessionId || eventSessionId === activeSessionRef.current) setUiRequest(undefined);
         void refreshSessions();
         if (!eventSessionId || eventSessionId === activeSessionRef.current) void refreshSessionStats();
+        if (
+          eventSessionId
+          && !interruptingSessionIdsRef.current.has(eventSessionId)
+          && !drainingFollowUpSessionIdsRef.current.has(eventSessionId)
+        ) {
+          queueMicrotask(() => drainFollowUpQueueRef.current(eventSessionId));
+        }
         return;
       }
       if (event.type === "extension_ui_request") {
@@ -802,7 +878,55 @@ export default function App() {
     const top = below + SESSION_MENU_HEIGHT <= window.innerHeight - 8
       ? below
       : Math.max(8, rect.top - SESSION_MENU_HEIGHT - 4);
+    setProjectMenu(undefined);
     setSessionMenu({ sessionId: session.id, left, top });
+  };
+
+  const openProjectMenu = (event: ReactMouseEvent<HTMLElement>, project: WorkspaceItem) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - PROJECT_MENU_WIDTH - 8, rect.right - PROJECT_MENU_WIDTH));
+    const below = rect.bottom + 4;
+    const top = below + PROJECT_MENU_HEIGHT <= window.innerHeight - 8
+      ? below
+      : Math.max(8, rect.top - PROJECT_MENU_HEIGHT - 4);
+    setSessionMenu(undefined);
+    setProjectMenu({ path: project.path, left, top });
+  };
+
+  const requestProjectRemoval = (project: WorkspaceItem) => {
+    setProjectMenu(undefined);
+    setProjectPendingRemoval(project);
+  };
+
+  const removeProject = async () => {
+    const project = projectPendingRemoval;
+    if (!project || projectRemovalBusy) return;
+    setProjectRemovalBusy(true);
+    try {
+      const nextWorkspaces = await window.devinAgent.workspace.forget(project.path);
+      setWorkspaces(nextWorkspaces);
+      setExpandedProjects((current) => {
+        const next = new Set(current);
+        next.delete(project.path);
+        return next;
+      });
+      setFullyExpandedProjects((current) => {
+        const next = new Set(current);
+        next.delete(project.path);
+        return next;
+      });
+      if (!activeSessionRef.current && workspaceRef.current === project.path) {
+        await createThreadInProject(undefined);
+      }
+      setProjectPendingRemoval(undefined);
+      setToast({ message: t("sidebar.projectRemoved", { project: project.name }), type: "info" });
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    } finally {
+      setProjectRemovalBusy(false);
+    }
   };
 
   const beginSessionRename = (session: SessionSummary) => {
@@ -877,15 +1001,105 @@ export default function App() {
     }
   };
 
-  const sendMessage = async () => {
+  const dispatchPrompt = useCallback(async (
+    targetSessionId: string,
+    prompt: QueuedPrompt,
+    command: "prompt" | "follow_up" = "prompt",
+  ) => {
+    const displayText = prompt.text || t("composer.attachedImage");
+    followingConversationTailRef.current = targetSessionId === activeSessionRef.current;
+    updateSessionMessages(targetSessionId, (current) => [
+      ...current,
+      optimisticUserMessage(displayText, false, prompt.images),
+    ]);
+    const sentAt = new Date().toISOString();
+    setSessions((current) => {
+      const title = crop(displayText, 80);
+      const existing = current.find((session) => session.path === targetSessionId);
+      if (existing) {
+        return current.map((session) => session.path === targetSessionId ? {
+          ...session,
+          title: session.messageCount ? session.title : title,
+          updatedAt: sentAt,
+          messageCount: (session.messageCount ?? 0) + 1,
+        } : session);
+      }
+      const cwd = activeCwdRef.current;
+      return cwd ? [{
+        id: targetSessionId,
+        path: targetSessionId,
+        cwd,
+        title,
+        createdAt: sentAt,
+        updatedAt: sentAt,
+        provider: "devin",
+        messageCount: 1,
+      }, ...current] : current;
+    });
+    markSessionRunning(targetSessionId, true);
+    try {
+      await window.devinAgent.agent.command(command, {
+        sessionId: targetSessionId,
+        message: prompt.text || t("composer.describeImage"),
+        ...(prompt.images.length ? { images: prompt.images.map((image) => ({ type: "image", ...image })) } : {}),
+      });
+    } catch (error) {
+      markSessionRunning(targetSessionId, false);
+      throw error;
+    }
+  }, [markSessionRunning, t, updateSessionMessages]);
+
+  const drainFollowUpQueue = useCallback((sessionId: string) => {
+    if (
+      runningSessionIdsRef.current.has(sessionId)
+      || interruptingSessionIdsRef.current.has(sessionId)
+      || drainingFollowUpSessionIdsRef.current.has(sessionId)
+    ) return;
+    const taken = takeFollowUp(followUpQueuesRef.current.get(sessionId) ?? []);
+    if (!taken.item) return;
+    setFollowUpQueue(sessionId, () => taken.queue);
+    drainingFollowUpSessionIdsRef.current.add(sessionId);
+    void (async () => {
+      let succeeded = false;
+      try {
+        await dispatchPrompt(sessionId, taken.item!.value);
+        succeeded = true;
+      } catch (error) {
+        setFollowUpQueue(sessionId, (queue) => restoreFollowUp(queue, taken.item!, taken.index));
+        if (!isAgentSessionClosedError(error)) {
+          setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+        }
+      } finally {
+        drainingFollowUpSessionIdsRef.current.delete(sessionId);
+      }
+      if (succeeded) drainFollowUpQueueRef.current(sessionId);
+    })();
+  }, [dispatchPrompt, setFollowUpQueue]);
+
+  useEffect(() => {
+    drainFollowUpQueueRef.current = drainFollowUpQueue;
+    return () => { drainFollowUpQueueRef.current = () => undefined; };
+  }, [drainFollowUpQueue]);
+
+  const interruptAndDispatch = useCallback(async (sessionId: string, prompt: QueuedPrompt) => {
+    interruptingSessionIdsRef.current.add(sessionId);
+    try {
+      await dispatchPrompt(sessionId, prompt, "follow_up");
+    } finally {
+      interruptingSessionIdsRef.current.delete(sessionId);
+      if (!runningSessionIdsRef.current.has(sessionId)) drainFollowUpQueueRef.current(sessionId);
+    }
+  }, [dispatchPrompt]);
+
+  const sendMessage = async ({ interrupt = false }: { interrupt?: boolean } = {}) => {
     if (sessionLocked) return;
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     if (attachments.length > 0 && !imagePromptEnabled) {
-      setToast({ message: "The current Devin session or model does not advertise image input.", type: "error" });
+      setToast({ message: t("composer.imagesUnavailable"), type: "error" });
       return;
     }
-    let alreadyRunning = running;
+    const pendingAttachments = attachments;
     let targetSessionId = activeSessionRef.current;
     if (!targetSessionId) {
       const cwd = activeCwdRef.current ?? homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
@@ -899,7 +1113,6 @@ export default function App() {
         projectPath,
       );
       if (!targetSessionId) return;
-      alreadyRunning = false;
       try {
         if (desiredModel) {
           await window.devinAgent.agent.command("set_model", { provider: "devin", modelId: desiredModel });
@@ -922,74 +1135,70 @@ export default function App() {
         return;
       }
     }
+    const prompt: QueuedPrompt = {
+      text,
+      images: pendingAttachments.map(({ data, mimeType }) => ({ data, mimeType })),
+    };
+    const alreadyRunning = runningSessionIdsRef.current.has(targetSessionId)
+      || interruptingSessionIdsRef.current.has(targetSessionId);
     followingConversationTailRef.current = true;
     setDraft("");
-    const queued = alreadyRunning;
-    const messageImages = attachments.map(({ data, mimeType }) => ({ data, mimeType }));
-    updateSessionMessages(targetSessionId, (current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
-    const sentAt = new Date().toISOString();
-    setSessions((current) => {
-      const title = crop(text || t("composer.attachedImage"), 80);
-      const existing = current.find((session) => session.path === targetSessionId);
-      if (existing) {
-        return current.map((session) => session.path === targetSessionId ? {
-          ...session,
-          title: session.messageCount ? session.title : title,
-          updatedAt: sentAt,
-          messageCount: (session.messageCount ?? 0) + 1,
-        } : session);
-      }
-      const cwd = activeCwdRef.current;
-      return cwd ? [{
-        id: targetSessionId,
-        path: targetSessionId,
-        cwd,
-        title,
-        createdAt: sentAt,
-        updatedAt: sentAt,
-        provider: "devin",
-        messageCount: 1,
-      }, ...current] : current;
-    });
-    const images = messageImages.map((image) => ({ type: "image", ...image }));
     setAttachments([]);
-    markSessionRunning(targetSessionId, true);
+    if (alreadyRunning && !interrupt) {
+      setFollowUpQueue(targetSessionId, (queue) => enqueueFollowUp(queue, prompt));
+      return;
+    }
     try {
-      if (alreadyRunning) setToast({ message: "The active Devin prompt will be cancelled before these instructions are sent.", type: "info" });
-      await window.devinAgent.agent.command(alreadyRunning ? "follow_up" : "prompt", {
-        message: text || t("composer.describeImage"),
-        ...(images.length ? { images } : {}),
-      });
-      markSessionRunning(targetSessionId, false);
+      if (alreadyRunning) await interruptAndDispatch(targetSessionId, prompt);
+      else await dispatchPrompt(targetSessionId, prompt);
     } catch (error) {
-      if (isAgentSessionClosedError(error)) {
-        markSessionRunning(targetSessionId, false);
-        return;
+      setDraft((current) => current || text);
+      setAttachments((current) => current.length > 0 ? current : pendingAttachments);
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
       }
-      markSessionRunning(targetSessionId, alreadyRunning);
-      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  };
+
+  const sendQueuedPromptNow = async (itemId: string) => {
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) return;
+    const taken = takeFollowUp(followUpQueuesRef.current.get(sessionId) ?? [], itemId);
+    if (!taken.item) return;
+    setFollowUpQueue(sessionId, () => taken.queue);
+    try {
+      if (runningSessionIdsRef.current.has(sessionId) || interruptingSessionIdsRef.current.has(sessionId)) {
+        await interruptAndDispatch(sessionId, taken.item.value);
+      }
+      else await dispatchPrompt(sessionId, taken.item.value);
+    } catch (error) {
+      setFollowUpQueue(sessionId, (queue) => restoreFollowUp(queue, taken.item!, taken.index));
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
     }
   };
 
   const stopAgent = async () => {
-    await window.devinAgent.agent.command("abort").catch(() => undefined);
-    markSessionRunning(activeSessionRef.current, false);
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) return;
+    await window.devinAgent.agent.command("abort", { sessionId }).catch(() => undefined);
+    markSessionRunning(sessionId, false);
   };
 
   const runAvailableCommand = async (command: AvailableCommand) => {
     const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
     if (/^\/handoff\b/i.test(name) && !window.confirm("Handoff moves this task to a cloud Devin session. Continue?")) return;
-    const alreadyRunning = running;
     const targetSessionId = activeSessionRef.current;
     if (!targetSessionId) return;
-    followingConversationTailRef.current = true;
-    updateSessionMessages(targetSessionId, (current) => [...current, optimisticUserMessage(name, alreadyRunning)]);
-    markSessionRunning(targetSessionId, true);
+    const prompt = { text: name, images: [] } satisfies QueuedPrompt;
+    if (runningSessionIdsRef.current.has(targetSessionId)) {
+      setFollowUpQueue(targetSessionId, (queue) => enqueueFollowUp(queue, prompt));
+      return;
+    }
     try {
-      await window.devinAgent.agent.command(alreadyRunning ? "follow_up" : "prompt", { message: name });
-      markSessionRunning(targetSessionId, false);
+      await dispatchPrompt(targetSessionId, prompt);
     } catch (error) {
-      markSessionRunning(targetSessionId, false);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
@@ -997,7 +1206,7 @@ export default function App() {
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void sendMessage();
+      void sendMessage({ interrupt: event.metaKey || event.ctrlKey });
     }
   };
 
@@ -1205,6 +1414,159 @@ export default function App() {
     window.addEventListener("pointercancel", stopResizing);
   };
 
+  const startProjectDrag = (event: ReactDragEvent<HTMLElement>, item: WorkspaceItem) => {
+    if (sessionQuery.trim()) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", item.path);
+    sidebarDragRef.current = { kind: "project", id: item.path, original: workspacesRef.current };
+    setSidebarDrag({ kind: "project", id: item.path });
+  };
+
+  const dragProjectOver = (event: ReactDragEvent<HTMLElement>, targetPath: string) => {
+    const drag = sidebarDragRef.current;
+    if (!drag || drag.kind !== "project") return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setWorkspaces((current) => {
+      const next = moveByKey(current, drag.id, targetPath, (item) => item.path);
+      workspacesRef.current = next;
+      return next;
+    });
+  };
+
+  const startSessionDrag = (
+    event: ReactDragEvent<HTMLElement>,
+    session: SessionSummary,
+    groupKey: SidebarSessionGroupKey,
+  ) => {
+    if (sessionQuery.trim() || renamingSessionId === session.id) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", session.id);
+    sidebarDragRef.current = { kind: "session", id: session.id, groupKey, original: sessionsRef.current };
+    setSidebarDrag({ kind: "session", id: session.id, groupKey });
+  };
+
+  const dragSessionOver = (
+    event: ReactDragEvent<HTMLElement>,
+    targetId: string,
+    groupKey: SidebarSessionGroupKey,
+  ) => {
+    const drag = sidebarDragRef.current;
+    if (!drag || drag.kind !== "session" || drag.groupKey !== groupKey) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setSessions((current) => {
+      const next = reorderSessionsWithinGroup(current, groupKey, drag.id, targetId, projectPaths);
+      sessionsRef.current = next;
+      return next;
+    });
+  };
+
+  const finishSidebarDrag = async (event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const drag = sidebarDragRef.current;
+    if (!drag) return;
+    sidebarDragRef.current = undefined;
+    setSidebarDrag(undefined);
+    try {
+      if (drag.kind === "project") {
+        const persisted = await window.devinAgent.workspace.reorder(workspacesRef.current.map((item) => item.path));
+        workspacesRef.current = persisted;
+        setWorkspaces(persisted);
+        return;
+      }
+      if (!window.devinAgent.sessions.reorder) throw new Error(t("sidebar.reorderRestartRequired"));
+      const currentProjectPaths = new Set(workspacesRef.current.map((item) => item.path));
+      const ids = orderedSessionIdsForGroup(sessionsRef.current, drag.groupKey, currentProjectPaths);
+      await window.devinAgent.sessions.reorder(ids);
+    } catch (error) {
+      if (drag.kind === "project") {
+        workspacesRef.current = drag.original;
+        setWorkspaces(drag.original);
+      } else {
+        sessionsRef.current = drag.original;
+        setSessions(drag.original);
+      }
+      setToast({ message: t("sidebar.reorderFailed", { error: cleanError(error instanceof Error ? error.message : String(error)) }), type: "error" });
+    }
+  };
+
+  const cancelSidebarDrag = () => {
+    const drag = sidebarDragRef.current;
+    if (!drag) return;
+    sidebarDragRef.current = undefined;
+    setSidebarDrag(undefined);
+    if (drag.kind === "project") {
+      workspacesRef.current = drag.original;
+      setWorkspaces(drag.original);
+    } else {
+      sessionsRef.current = drag.original;
+      setSessions(drag.original);
+    }
+  };
+
+  const moveProjectByKeyboard = async (event: KeyboardEvent<HTMLButtonElement>, item: WorkspaceItem) => {
+    if (sessionQuery.trim()) return;
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const original = workspacesRef.current;
+    const currentIndex = original.findIndex((candidate) => candidate.path === item.path);
+    const targetIndex = currentIndex + (event.key === "ArrowUp" ? -1 : 1);
+    const target = original[targetIndex];
+    if (currentIndex < 0 || !target) return;
+    const next = moveByKey(original, item.path, target.path, (candidate) => candidate.path);
+    workspacesRef.current = next;
+    setWorkspaces(next);
+    try {
+      const persisted = await window.devinAgent.workspace.reorder(next.map((candidate) => candidate.path));
+      workspacesRef.current = persisted;
+      setWorkspaces(persisted);
+    } catch (error) {
+      workspacesRef.current = original;
+      setWorkspaces(original);
+      setToast({ message: t("sidebar.reorderFailed", { error: cleanError(error instanceof Error ? error.message : String(error)) }), type: "error" });
+    }
+  };
+
+  const moveSessionByKeyboard = async (
+    event: KeyboardEvent<HTMLButtonElement>,
+    session: SessionSummary,
+    groupKey: SidebarSessionGroupKey,
+  ) => {
+    if (sessionQuery.trim() || renamingSessionId === session.id) return;
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const original = sessionsRef.current;
+    const currentProjectPaths = new Set(workspacesRef.current.map((item) => item.path));
+    const orderedIds = orderedSessionIdsForGroup(original, groupKey, currentProjectPaths);
+    const currentIndex = orderedIds.indexOf(session.id);
+    const targetIndex = currentIndex + (event.key === "ArrowUp" ? -1 : 1);
+    const targetId = orderedIds[targetIndex];
+    if (currentIndex < 0 || !targetId) return;
+    const next = reorderSessionsWithinGroup(original, groupKey, session.id, targetId, currentProjectPaths);
+    sessionsRef.current = next;
+    setSessions(next);
+    try {
+      if (!window.devinAgent.sessions.reorder) throw new Error(t("sidebar.reorderRestartRequired"));
+      await window.devinAgent.sessions.reorder(orderedSessionIdsForGroup(next, groupKey, currentProjectPaths));
+    } catch (error) {
+      sessionsRef.current = original;
+      setSessions(original);
+      setToast({ message: t("sidebar.reorderFailed", { error: cleanError(error instanceof Error ? error.message : String(error)) }), type: "error" });
+    }
+  };
+
   const projectSessions = useMemo(() => {
     const grouped = new Map<string, SessionSummary[]>();
     for (const item of workspaces) grouped.set(item.path, []);
@@ -1236,9 +1598,10 @@ export default function App() {
   const selectedCapabilityModel = capabilities?.models.find((candidate) => candidate.id === model);
   const imagePromptEnabled = Boolean(capabilities && supportsImagePrompt(capabilities, selectedCapabilityModel));
   const sessionMenuItem = sessionMenu ? sessions.find((session) => session.id === sessionMenu.sessionId) : undefined;
+  const projectMenuItem = projectMenu ? workspaces.find((item) => item.path === projectMenu.path) : undefined;
 
   return (
-    <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}`}>
+    <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}${sidebarDrag ? " sidebar-is-dragging" : ""}`}>
       <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`} inert={!sidebarOpen}>
         <div className="sidebar-titlebar">
           <div className="sidebar-product-title">
@@ -1272,9 +1635,25 @@ export default function App() {
                 {pinnedSessions.map((session) => (
                   <div
                     key={session.path}
-                    className={`recent-task-item pinned-task-item ${session.path === activeSession ? "active" : ""}`}
+                    className={`recent-task-item pinned-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                     onContextMenu={(event) => openSessionMenu(event, session)}
+                    onDragOver={(event) => dragSessionOver(event, session.id, "pinned")}
+                    onDrop={(event) => void finishSidebarDrag(event)}
                   >
+                    <button
+                      type="button"
+                      className="sidebar-drag-handle session-drag-handle"
+                      draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
+                      disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
+                      onClick={(event) => event.stopPropagation()}
+                      onDragStart={(event) => startSessionDrag(event, session, "pinned")}
+                      onDragEnd={cancelSidebarDrag}
+                      onKeyDown={(event) => void moveSessionByKeyboard(event, session, "pinned")}
+                      aria-label={t("session.drag", { title: session.title })}
+                      title={t("session.drag", { title: session.title })}
+                    >
+                      <GripVertical size={13} />
+                    </button>
                     {renamingSessionId === session.id ? (
                       <input
                         ref={sessionRenameInputRef}
@@ -1340,7 +1719,26 @@ export default function App() {
               const projectIsActive = workspace === item.path && !activeSession;
               return (
                 <div className="project-group" key={item.path}>
-                  <div className={`project-row-shell${projectIsActive ? " active" : ""}`}>
+                  <div
+                    className={`project-row-shell${projectIsActive ? " active" : ""}${sidebarDrag?.kind === "project" && sidebarDrag.id === item.path ? " dragging" : ""}`}
+                    onContextMenu={(event) => openProjectMenu(event, item)}
+                    onDragOver={(event) => dragProjectOver(event, item.path)}
+                    onDrop={(event) => void finishSidebarDrag(event)}
+                  >
+                    <button
+                      type="button"
+                      className="sidebar-drag-handle project-drag-handle"
+                      draggable={!sessionQuery.trim()}
+                      disabled={Boolean(sessionQuery.trim())}
+                      onClick={(event) => event.stopPropagation()}
+                      onDragStart={(event) => startProjectDrag(event, item)}
+                      onDragEnd={cancelSidebarDrag}
+                      onKeyDown={(event) => void moveProjectByKeyboard(event, item)}
+                      aria-label={t("sidebar.dragProject", { project: item.name })}
+                      title={t("sidebar.dragProject", { project: item.name })}
+                    >
+                      <GripVertical size={13} />
+                    </button>
                     <button
                       className="project-row"
                       onClick={() => toggleWorkspace(item)}
@@ -1358,6 +1756,15 @@ export default function App() {
                     >
                       <SquarePen size={15} />
                     </button>
+                    <button
+                      className="project-more-action"
+                      onClick={(event) => openProjectMenu(event, item)}
+                      aria-label={t("sidebar.projectActions", { project: item.name })}
+                      aria-haspopup="menu"
+                      title={t("sidebar.projectActions", { project: item.name })}
+                    >
+                      <Ellipsis size={15} />
+                    </button>
                   </div>
                   {isExpanded && (
                     <div className="project-task-list">
@@ -1365,9 +1772,25 @@ export default function App() {
                       {visibleTasks.map((session) => (
                         <div
                           key={session.path}
-                          className={`project-task-item ${session.path === activeSession ? "active" : ""}`}
+                          className={`project-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                           onContextMenu={(event) => openSessionMenu(event, session)}
+                          onDragOver={(event) => dragSessionOver(event, session.id, `project:${item.path}`)}
+                          onDrop={(event) => void finishSidebarDrag(event)}
                         >
+                          <button
+                            type="button"
+                            className="sidebar-drag-handle session-drag-handle"
+                            draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
+                            disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
+                            onClick={(event) => event.stopPropagation()}
+                            onDragStart={(event) => startSessionDrag(event, session, `project:${item.path}`)}
+                            onDragEnd={cancelSidebarDrag}
+                            onKeyDown={(event) => void moveSessionByKeyboard(event, session, `project:${item.path}`)}
+                            aria-label={t("session.drag", { title: session.title })}
+                            title={t("session.drag", { title: session.title })}
+                          >
+                            <GripVertical size={13} />
+                          </button>
                           {renamingSessionId === session.id ? (
                             <input
                               ref={sessionRenameInputRef}
@@ -1439,9 +1862,25 @@ export default function App() {
             {recentTasks.map((session) => (
               <div
                 key={session.path}
-                className={`recent-task-item ${session.path === activeSession ? "active" : ""}`}
+                className={`recent-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                 onContextMenu={(event) => openSessionMenu(event, session)}
+                onDragOver={(event) => dragSessionOver(event, session.id, "recent")}
+                onDrop={(event) => void finishSidebarDrag(event)}
               >
+                <button
+                  type="button"
+                  className="sidebar-drag-handle session-drag-handle"
+                  draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
+                  disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
+                  onClick={(event) => event.stopPropagation()}
+                  onDragStart={(event) => startSessionDrag(event, session, "recent")}
+                  onDragEnd={cancelSidebarDrag}
+                  onKeyDown={(event) => void moveSessionByKeyboard(event, session, "recent")}
+                  aria-label={t("session.drag", { title: session.title })}
+                  title={t("session.drag", { title: session.title })}
+                >
+                  <GripVertical size={13} />
+                </button>
                 {renamingSessionId === session.id ? (
                   <input
                     ref={sessionRenameInputRef}
@@ -1528,7 +1967,7 @@ export default function App() {
               </div>}
             </header>
 
-            <section className={`conversation-pane${ENABLE_CONVERSATION_CONTEXT && contextCardOpen ? " context-card-visible" : ""}`}>
+            <section className={`conversation-pane${ENABLE_CONVERSATION_CONTEXT && contextCardOpen ? " context-card-visible" : ""}${activeFollowUps.length > 0 ? " has-follow-up-queue" : ""}`}>
             <div
               className="message-scroll"
               ref={scrollRef}
@@ -1575,6 +2014,15 @@ export default function App() {
 
             <div className="composer-wrap">
               <div className="composer-stack">
+                {activeSession && activeFollowUps.length > 0 && (
+                  <FollowUpQueue
+                    items={activeFollowUps}
+                    onMove={(draggedId, targetId) => setFollowUpQueue(activeSession, (queue) => moveFollowUp(queue, draggedId, targetId))}
+                    onDelete={(itemId) => setFollowUpQueue(activeSession, (queue) => removeFollowUp(queue, itemId))}
+                    onEdit={(itemId, text) => setFollowUpQueue(activeSession, (queue) => updateFollowUp(queue, itemId, (value) => ({ ...value, text })))}
+                    onSendNow={(itemId) => void sendQueuedPromptNow(itemId)}
+                  />
+                )}
                 {messages.length === 0 && (
                   <div className={`composer-workspace-context ${workspace ? "selected" : ""}`}>
                     <button
@@ -1733,6 +2181,19 @@ export default function App() {
               {sessionMenuItem.pinned ? <PinOff size={14} /> : <Pin size={14} />}
               <span>{t(sessionMenuItem.pinned ? "session.unpin" : "session.pin")}</span>
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setSessionMenu(undefined);
+                void window.devinAgent.sessions.openInNewWindow?.(sessionMenuItem.id).catch((error) => {
+                  setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+                });
+              }}
+            >
+              <ExternalLink size={14} />
+              <span>{t("session.openInNewWindow")}</span>
+            </button>
             <div className="session-action-separator" />
             <button
               type="button"
@@ -1750,6 +2211,23 @@ export default function App() {
         </>
       )}
 
+      {projectMenu && projectMenuItem && (
+        <>
+          <div className="session-menu-backdrop" onPointerDown={() => setProjectMenu(undefined)} aria-hidden="true" />
+          <div
+            className="session-action-menu project-action-menu"
+            role="menu"
+            aria-label={t("sidebar.projectActions", { project: projectMenuItem.name })}
+            style={{ left: projectMenu.left, top: projectMenu.top }}
+          >
+            <button className="danger-menu-item" type="button" role="menuitem" onClick={() => requestProjectRemoval(projectMenuItem)}>
+              <Trash2 size={14} />
+              <span>{t("sidebar.removeProject")}</span>
+            </button>
+          </div>
+        </>
+      )}
+
       {archiveNotice && (
         <div className="archive-hint" role="status" aria-live="polite">
           <Archive size={14} />
@@ -1757,6 +2235,15 @@ export default function App() {
           <button type="button" onClick={() => void restoreSession(archiveNotice)}><Undo2 size={13} />{t("archive.undo")}</button>
           <button type="button" className="archive-hint-close" onClick={() => setArchiveNotice(undefined)} aria-label={t("common.close")}><X size={13} /></button>
         </div>
+      )}
+
+      {projectPendingRemoval && (
+        <ProjectRemovalDialog
+          project={projectPendingRemoval}
+          busy={projectRemovalBusy}
+          onCancel={() => { if (!projectRemovalBusy) setProjectPendingRemoval(undefined); }}
+          onConfirm={() => void removeProject()}
+        />
       )}
 
       {settingsOpen && (
@@ -1987,6 +2474,168 @@ function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(i
       {message.text && <div className="user-message-text">{message.text}</div>}
       {message.queued && <small>{t("status.queued")}</small>}
     </div>
+  );
+}
+
+function FollowUpQueue({
+  items,
+  onMove,
+  onDelete,
+  onEdit,
+  onSendNow,
+}: {
+  items: FollowUpItem<QueuedPrompt>[];
+  onMove(draggedId: string, targetId: string): void;
+  onDelete(itemId: string): void;
+  onEdit(itemId: string, text: string): void;
+  onSendNow(itemId: string): void;
+}) {
+  const { t } = useI18n();
+  const draggingIdRef = useRef<string | undefined>(undefined);
+  const pointerTargetIdRef = useRef<string | undefined>(undefined);
+  const [draggingId, setDraggingId] = useState<string>();
+  const [editingId, setEditingId] = useState<string>();
+  const [editDraft, setEditDraft] = useState("");
+
+  const startEditing = (item: FollowUpItem<QueuedPrompt>) => {
+    setEditingId(item.id);
+    setEditDraft(item.value.text);
+  };
+  const finishEditing = (item: FollowUpItem<QueuedPrompt>) => {
+    const next = editDraft.trim();
+    if (next || item.value.images.length > 0) onEdit(item.id, next);
+    setEditingId(undefined);
+    setEditDraft("");
+  };
+  const finishPointerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    draggingIdRef.current = undefined;
+    pointerTargetIdRef.current = undefined;
+    setDraggingId(undefined);
+  };
+  const movePointerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const sourceId = draggingIdRef.current;
+    if (!sourceId) return;
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-follow-up-id]");
+    const targetId = target?.dataset.followUpId;
+    if (!targetId || targetId === sourceId || targetId === pointerTargetIdRef.current) return;
+    pointerTargetIdRef.current = targetId;
+    onMove(sourceId, targetId);
+  };
+
+  return (
+    <section className="follow-up-queue" aria-label={t("queue.title")}>
+      <header className="follow-up-queue-header">
+        <span>{t("queue.waiting", { count: items.length })}</span>
+        <small>{t("queue.shortcut")}</small>
+      </header>
+      <div className="follow-up-queue-list">
+        {items.map((item, index) => {
+          const editing = editingId === item.id;
+          return (
+            <div
+              key={item.id}
+              data-follow-up-id={item.id}
+              className={`follow-up-row${draggingId === item.id ? " dragging" : ""}`}
+              draggable={!editing}
+              tabIndex={editing ? -1 : 0}
+              onDragStart={(event) => {
+                draggingIdRef.current = item.id;
+                setDraggingId(item.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", item.id);
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                const sourceId = draggingIdRef.current;
+                if (sourceId && sourceId !== item.id) onMove(sourceId, item.id);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const sourceId = draggingIdRef.current || event.dataTransfer.getData("text/plain");
+                if (sourceId && sourceId !== item.id) onMove(sourceId, item.id);
+                draggingIdRef.current = undefined;
+                setDraggingId(undefined);
+              }}
+              onDragEnd={() => {
+                draggingIdRef.current = undefined;
+                setDraggingId(undefined);
+              }}
+              onKeyDown={(event) => {
+                if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                const target = items[index + (event.key === "ArrowUp" ? -1 : 1)];
+                if (!target) return;
+                event.preventDefault();
+                onMove(item.id, target.id);
+              }}
+              aria-label={t("queue.drag", { message: item.value.text || t("composer.attachedImage") })}
+            >
+              <span
+                className="follow-up-drag-handle"
+                aria-hidden="true"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  draggingIdRef.current = item.id;
+                  pointerTargetIdRef.current = item.id;
+                  setDraggingId(item.id);
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={movePointerDrag}
+                onPointerUp={finishPointerDrag}
+                onPointerCancel={finishPointerDrag}
+              ><GripVertical size={13} /></span>
+              <span className="follow-up-kind" aria-hidden="true"><CornerDownRight size={14} /></span>
+              {editing ? (
+                <div className="follow-up-editor">
+                  <textarea
+                    value={editDraft}
+                    onChange={(event) => setEditDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setEditingId(undefined);
+                      }
+                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault();
+                        finishEditing(item);
+                      }
+                    }}
+                    autoFocus
+                    rows={2}
+                    aria-label={t("queue.edit")}
+                  />
+                  <div className="follow-up-editor-actions">
+                    <button type="button" onClick={() => setEditingId(undefined)}>{t("common.cancel")}</button>
+                    <button type="button" className="primary-button" onClick={() => finishEditing(item)}>{t("queue.save")}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="follow-up-copy">
+                  <span>{item.value.text || t("composer.attachedImage")}</span>
+                  {item.value.images.length > 0 && <small>{t("queue.images", { count: item.value.images.length })}</small>}
+                </div>
+              )}
+              {!editing && (
+                <div className="follow-up-actions">
+                  <button type="button" className="follow-up-send-now" onClick={() => onSendNow(item.id)} title={t("queue.sendNow")}>
+                    <CornerDownLeft size={14} /><span>{t("queue.sendNow")}</span>
+                  </button>
+                  <button type="button" onClick={() => startEditing(item)} title={t("queue.edit")} aria-label={t("queue.edit")}><Pencil size={14} /></button>
+                  <button type="button" onClick={() => onDelete(item.id)} title={t("queue.delete")} aria-label={t("queue.delete")}><Trash2 size={14} /></button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -2333,6 +2982,46 @@ function ProfileAvatar({ profile, className }: { profile: UserProfile; className
         ? <img src={profile.avatarDataUrl} alt="" />
         : profileInitials(profile.nickname)}
     </span>
+  );
+}
+
+function ProjectRemovalDialog({
+  project,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  project: WorkspaceItem;
+  busy: boolean;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
+    >
+      <section
+        className="approval-dialog project-removal-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="project-removal-title"
+        aria-describedby="project-removal-description"
+        onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
+      >
+        <div className="approval-icon project-removal-icon"><Trash2 size={18} /></div>
+        <h3 id="project-removal-title">{t("sidebar.removeProjectTitle", { project: project.name })}</h3>
+        <p id="project-removal-description">{t("sidebar.removeProjectDescription")}</p>
+        <div className="dialog-actions">
+          <button type="button" autoFocus disabled={busy} onClick={onCancel}>{t("common.cancel")}</button>
+          <button type="button" className="danger-button" disabled={busy} onClick={onConfirm}>
+            {busy ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+            {t(busy ? "sidebar.removingProject" : "sidebar.removeProject")}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2742,19 +3431,14 @@ function SettingsDialog(props: {
               <h2>Devin Agent Desktop</h2>
               <p>{t("settings.aboutTagline")}</p>
               <div className="about-links">
-                <button type="button" title={DEVIN_WEBSITE_URL} onClick={() => void window.devinAgent.app.openExternal(DEVIN_WEBSITE_URL)}>
-                  <span className="about-link-icon"><Globe2 size={17} /></span>
-                  <span><strong>{t("settings.website")}</strong><small>devin-agent.ai</small></span>
-                  <ExternalLink size={14} />
-                </button>
                 <button type="button" title={DEVIN_GITHUB_URL} onClick={() => void window.devinAgent.app.openExternal(DEVIN_GITHUB_URL)}>
                   <span className="about-link-icon"><GitFork size={17} /></span>
-                  <span><strong>{t("settings.githubRepository")}</strong><small>github.com/thinkany-ai/devin-agent</small></span>
+                  <span><strong>{t("settings.githubRepository")}</strong><small>{DEVIN_GITHUB_DISPLAY_URL}</small></span>
                   <ExternalLink size={14} />
                 </button>
                 <button type="button" title={DEVIN_ISSUES_URL} onClick={() => void window.devinAgent.app.openExternal(DEVIN_ISSUES_URL)}>
                   <span className="about-link-icon"><MessageSquareWarning size={17} /></span>
-                  <span><strong>{t("settings.reportIssue")}</strong><small>github.com/thinkany-ai/devin-agent/issues</small></span>
+                  <span><strong>{t("settings.reportIssue")}</strong><small>{DEVIN_ISSUES_DISPLAY_URL}</small></span>
                   <ExternalLink size={14} />
                 </button>
               </div>
@@ -3435,12 +4119,6 @@ function relativeTime(value: string, locale: string, nowLabel: string): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`;
   return new Date(value).toLocaleDateString(locale, { month: "short", day: "numeric" });
-}
-
-function compareSidebarSessions(first: SessionSummary, second: SessionSummary): number {
-  return Number(Boolean(second.pinned)) - Number(Boolean(first.pinned))
-    || second.updatedAt.localeCompare(first.updatedAt)
-    || first.title.localeCompare(second.title);
 }
 
 function sortSidebarSessions(sessions: SessionSummary[]): SessionSummary[] {

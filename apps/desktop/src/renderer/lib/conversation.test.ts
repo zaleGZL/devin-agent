@@ -170,7 +170,7 @@ describe("conversation events", () => {
     expect(turn.responses.map((entry) => entry.text)).toEqual(["Here is the final answer."]);
   });
 
-  it("keeps all streamed text inside work until the turn is settled", () => {
+  it("keeps streamed text inside work while active and exposes every text segment after settling", () => {
     const messages = normalizeMessages([
       { role: "assistant", content: [
         { type: "thinking", thinking: "Inspect the file" },
@@ -188,8 +188,27 @@ describe("conversation events", () => {
     expect(activeTurn.work.map((entry) => entry.item.type)).toEqual(["thinking", "text", "tool", "thinking", "text"]);
 
     const settledTurn = splitAssistantTurn(messages, false);
-    expect(settledTurn.work.map((entry) => entry.item.type)).toEqual(["thinking", "text", "tool", "thinking"]);
-    expect(settledTurn.responses.map((entry) => entry.text)).toEqual(["Here is the final answer."]);
+    expect(settledTurn.work.map((entry) => entry.item.type)).toEqual(["thinking", "tool", "thinking"]);
+    expect(settledTurn.responses.map((entry) => entry.text)).toEqual(["I’ll inspect the evidence first.", "Here is the final answer."]);
+  });
+
+  it("does not collapse restored Devin messages when later tool updates exist", () => {
+    const messages = normalizeMessages([{
+      role: "assistant",
+      content: [
+        { type: "text", text: "I found the relevant file." },
+        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "src/a.ts" } },
+        { type: "text", text: "I updated the copy." },
+        { type: "toolCall", id: "call-2", name: "apply_patch", arguments: { path: "src/a.ts" } },
+      ],
+    }]);
+
+    const restoredTurn = splitAssistantTurn(messages, false);
+    expect(restoredTurn.work.map((entry) => entry.item.type)).toEqual(["tool", "tool"]);
+    expect(restoredTurn.responses.map((entry) => entry.text)).toEqual([
+      "I found the relevant file.",
+      "I updated the copy.",
+    ]);
   });
 
   it("removes stale streaming state and cursor when an ACP prompt settles without a chunk end marker", () => {

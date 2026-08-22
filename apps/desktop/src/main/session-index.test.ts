@@ -9,6 +9,7 @@ import {
   mergeSessionSummary,
   readSessionSummary,
   renameSession,
+  reorderSessions,
   setSessionPinned,
   unarchiveSession,
   upsertSessionSummary,
@@ -72,6 +73,26 @@ describe("session index", () => {
     await expect(listSessions()).resolves.toEqual([
       expect.objectContaining({ id: "older", title: "Release checklist", customTitle: "Release checklist" }),
       expect.objectContaining({ id: "newer" }),
+    ]);
+  });
+
+  it("persists a custom sidebar order across later ACP summary updates", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devin-agent-session-index-"));
+    temporaryDirectories.push(directory);
+    configureSessionIndex(path.join(directory, "sessions.json"));
+    await upsertSessionSummary({ id: "first", path: "first", cwd: "/tmp/project", title: "First", createdAt: "2026-08-21T09:00:00Z", updatedAt: "2026-08-21T09:00:00Z" });
+    await upsertSessionSummary({ id: "second", path: "second", cwd: "/tmp/project", title: "Second", createdAt: "2026-08-21T10:00:00Z", updatedAt: "2026-08-21T10:00:00Z" });
+
+    await expect(reorderSessions(["first", "second"])).resolves.toBe(true);
+    await expect(listSessions()).resolves.toEqual([
+      expect.objectContaining({ id: "first", sidebarOrder: 0 }),
+      expect.objectContaining({ id: "second", sidebarOrder: 1 }),
+    ]);
+
+    await upsertSessionSummary({ id: "second", path: "second", cwd: "/tmp/project", title: "Updated second", createdAt: "2026-08-21T10:00:00Z", updatedAt: "2026-08-21T12:00:00Z" });
+    await expect(listSessions()).resolves.toEqual([
+      expect.objectContaining({ id: "first", sidebarOrder: 0 }),
+      expect.objectContaining({ id: "second", sidebarOrder: 1, title: "Updated second" }),
     ]);
   });
 

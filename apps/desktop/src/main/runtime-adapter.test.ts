@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentSnapshot,
+  isRuntimePromptRunning,
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
   platformSandboxDiagnostic,
+  resolveRuntimeCommandSessionId,
   resolveRuntimeSessionOpenAction,
 } from "./runtime-adapter";
 
 describe("runtime adapter", () => {
+  it("routes prompt and cancellation commands to an explicit background session", () => {
+    expect(resolveRuntimeCommandSessionId({ sessionId: "background" }, "active")).toBe("background");
+    expect(resolveRuntimeCommandSessionId({}, "active")).toBe("active");
+    expect(isRuntimePromptRunning(["background"], "background", "active", false)).toBe(true);
+    expect(isRuntimePromptRunning(undefined, "active", "active", true)).toBe(true);
+  });
+
   it("replays a transcript when the renderer has lost its local session history", () => {
     expect(resolveRuntimeSessionOpenAction("session-a", "session-a", true, true)).toBe("load");
     expect(resolveRuntimeSessionOpenAction("session-a", "session-b", true, true)).toBe("load");

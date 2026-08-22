@@ -18,21 +18,25 @@ const initializeResult = {
 class FakeTransport {
   isRunning = false;
   emitHistoryDuringLoad = false;
+  emitHistoryDuringNew = false;
   deferPrompts = false;
   private readonly promptResolvers: Array<(value: JsonObject) => void> = [];
-  requests: Array<{ method: string; params: unknown }> = [];
+  requests: Array<{ method: string; params: unknown; options?: unknown }> = [];
   notifications: Array<{ method: string; params: unknown }> = [];
 
   constructor(readonly options: AcpSpawnOptions) {}
 
   async start(): Promise<void> { this.isRunning = true; }
 
-  async request<T>(method: string, params?: unknown): Promise<T> {
-    this.requests.push({ method, params });
+  async request<T>(method: string, params?: unknown, options?: unknown): Promise<T> {
+    this.requests.push({ method, params, options });
     if (method === "initialize") return initializeResult as T;
     if (method === "authenticate") return { url: "https://app.devin.ai/login" } as T;
     if (method === "session/new" || method === "session/load") {
       const record = params as Record<string, unknown>;
+      if (method === "session/new" && this.emitHistoryDuringNew) {
+        this.emitUpdate({ sessionId: "new-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "new session update" } } });
+      }
       if (method === "session/load" && this.emitHistoryDuringLoad) {
         this.emitUpdate({ sessionId: String(record.sessionId), update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "restored history" } } });
       }
@@ -165,6 +169,18 @@ describe("DevinAcpHost contract", () => {
     await host.stop();
   });
 
+  it("does not apply the generic transport timeout to a running prompt", async () => {
+    const { host, transports } = createHost({ requestTimeoutMs: 10 });
+    await host.start();
+    await host.newSession("/workspace");
+
+    await host.prompt("long-running task", "new-session");
+
+    expect(transports[0]?.requests.find((request) => request.method === "session/prompt")?.options)
+      .toMatchObject({ timeoutMs: 0 });
+    await host.stop();
+  });
+
   it("accepts history updates emitted before session/load returns", async () => {
     const updates = vi.fn();
     const diagnostics = vi.fn();
@@ -178,6 +194,20 @@ describe("DevinAcpHost contract", () => {
       sessionId: "saved-session",
       update: expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
     }));
+    expect(diagnostics).not.toHaveBeenCalledWith(expect.objectContaining({ code: "stale-event" }));
+    await host.stop();
+  });
+
+  it("accepts updates emitted before session/new returns its generated id", async () => {
+    const updates = vi.fn();
+    const diagnostics = vi.fn();
+    const { host, transports } = createHost({ onUpdate: updates, onDiagnostic: diagnostics });
+    await host.start();
+    transports[0]!.emitHistoryDuringNew = true;
+
+    await host.newSession("/workspace");
+
+    expect(updates).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "new-session" }));
     expect(diagnostics).not.toHaveBeenCalledWith(expect.objectContaining({ code: "stale-event" }));
     await host.stop();
   });

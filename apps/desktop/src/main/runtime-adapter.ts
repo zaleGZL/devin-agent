@@ -17,6 +17,21 @@ export interface RuntimeSessionLike extends JsonRecord {
 
 export type RuntimeSessionOpenAction = "load" | "switch" | "reuse";
 
+export function resolveRuntimeCommandSessionId(payload: JsonRecord, activeSessionId: unknown): string | undefined {
+  const explicitSessionId = stringValue(payload.sessionId).trim();
+  return explicitSessionId || stringValue(activeSessionId).trim() || undefined;
+}
+
+export function isRuntimePromptRunning(
+  runningSessionIds: unknown,
+  sessionId: string,
+  activeSessionId: unknown,
+  activePromptRunning: unknown,
+): boolean {
+  if (Array.isArray(runningSessionIds)) return runningSessionIds.includes(sessionId);
+  return stringValue(activeSessionId) === sessionId && activePromptRunning === true;
+}
+
 /**
  * The ACP host knowing a session does not mean the renderer still owns its
  * transcript. A replay request must therefore win over the host's reuse

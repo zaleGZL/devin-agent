@@ -19,7 +19,7 @@ export async function listSessions(cwd?: string): Promise<SessionSummary[]> {
   const items = await readIndex();
   return items
     .filter((item) => !cwd || item.cwd === cwd)
-    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt));
+    .sort(compareSessionSummaries);
 }
 
 export async function upsertSessionSummary(summary: SessionSummary): Promise<SessionSummary[]> {
@@ -124,8 +124,24 @@ export async function setSessionPinned(id: string, pinned: boolean): Promise<boo
   const items = await readIndex();
   const index = items.findIndex((item) => item.id === id);
   if (index < 0) return false;
-  items[index] = { ...items[index], pinned };
+  const session = { ...items[index] };
+  delete session.sidebarOrder;
+  items[index] = { ...session, pinned };
   await writeIndex(items);
+  return true;
+}
+
+export async function reorderSessions(ids: string[]): Promise<boolean> {
+  const items = await readIndex();
+  const orderById = new Map(ids.map((id, index) => [id, index]));
+  let changed = false;
+  const next = items.map((item) => {
+    const sidebarOrder = orderById.get(item.id);
+    if (sidebarOrder === undefined) return item;
+    changed = changed || item.sidebarOrder !== sidebarOrder;
+    return { ...item, sidebarOrder };
+  });
+  if (changed) await writeIndex(next);
   return true;
 }
 
@@ -182,4 +198,17 @@ function isSessionSummary(value: unknown): value is SessionSummary {
     && typeof item.cwd === "string"
     && typeof item.title === "string"
     && typeof item.updatedAt === "string";
+}
+
+function compareSessionSummaries(first: SessionSummary, second: SessionSummary): number {
+  return Number(Boolean(second.pinned)) - Number(Boolean(first.pinned))
+    || compareOptionalOrder(first.sidebarOrder, second.sidebarOrder)
+    || second.updatedAt.localeCompare(first.updatedAt);
+}
+
+function compareOptionalOrder(first: number | undefined, second: number | undefined): number {
+  if (first === undefined && second === undefined) return 0;
+  if (first === undefined) return -1;
+  if (second === undefined) return 1;
+  return first - second;
 }
