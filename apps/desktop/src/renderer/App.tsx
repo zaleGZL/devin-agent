@@ -1192,6 +1192,10 @@ export default function App() {
       message: t(copied ? "annotation.copied" : "annotation.copyFailed"),
       type: copied ? "info" : "error",
     });
+    if (copied) {
+      setAnnotationSelection(undefined);
+      window.getSelection()?.removeAllRanges();
+    }
   }, [annotationSelection, t]);
 
   const addSelectionAnnotation = useCallback((withComment: boolean) => {

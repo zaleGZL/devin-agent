@@ -35,15 +35,7 @@ installation instructions are included below.
 
 ### Composer `@` references
 
-Type `@` in the composer to reference **Files**, **Directories**, or **Skills**. Files and
-directories are available only after selecting a project; the app never scans your home
-directory as a fallback. UTF-8 files up to 512 KiB are embedded only when Devin advertises
-ACP embedded-context support. Binary, larger, or unsupported files are sent as resource
-links. Directory references are links only and are never recursively expanded. Skill metadata
-is discovered from Devin-supported global and project `SKILL.md` locations, with project Skills
-overriding same-named global Skills. Each new session receives an immutable snapshot; selecting
-a Skill sends Devin's documented `@skills:<name>` syntax. Devin CLI, not the desktop app, loads
-and executes the Skill body.
+Type `@` in the composer to reference **Files**, **Directories**, or **Skills**.
 
 ## Prerequisites
 

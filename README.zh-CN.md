@@ -32,13 +32,7 @@ macOS 安装方法见下文。
 
 ### 输入框 `@` 引用
 
-在输入框键入 `@` 可引用**文件**、**目录**或 **Skills**。文件和目录仅在选择项目后可用；
-应用不会把用户主目录作为兜底扫描范围。只有 Devin 声明支持 ACP embedded context 时，
-应用才会内联不超过 512 KiB 的 UTF-8 文件；二进制文件、超大文件或不支持内联的文件会降级为
-resource link。目录始终只作为链接发送，不递归展开。Skill metadata 来自 Devin 支持的全局与项目
-`SKILL.md` 目录，同名时项目 Skill 覆盖全局 Skill；每个新 session 保存独立的不可变快照。
-选中 Skill 后发送 Devin 文档定义的 `@skills:<name>`，加载和执行正文的仍是 Devin CLI，Desktop
-不读取正文或执行 Skill。
+在输入框键入 `@` 可引用**文件**、**目录**或 **Skills**。
 
 ## 前置条件
 
