@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatPromptWithAnnotations, parsePromptAnnotations } from "./annotations";
+import {
+  formatPromptWithAnnotations,
+  parsePromptAnnotations,
+  prepareAnnotationSelection,
+  writeSelectionToClipboardEvent,
+} from "./annotations";
 
 describe("response annotations", () => {
   it("leaves ordinary prompts unchanged", () => {
@@ -24,5 +29,32 @@ describe("response annotations", () => {
   it("does not reinterpret malformed annotation envelopes", () => {
     const malformed = "<!-- devin-agent-response-annotations:v1 -->\n<response-annotations>oops";
     expect(parsePromptAnnotations(malformed)).toEqual({ text: malformed, annotations: [] });
+  });
+
+  it("preserves the original selection for copying", () => {
+    expect(prepareAnnotationSelection("First line\n  second line")).toEqual({
+      annotationText: "First line second line",
+      clipboardText: "First line\n  second line",
+    });
+  });
+
+  it("writes selected text to a native copy event", () => {
+    const values = new Map<string, string>();
+    let prevented = false;
+    expect(writeSelectionToClipboardEvent({
+      clipboardData: { setData: (type, value) => { values.set(type, value); } },
+      preventDefault: () => { prevented = true; },
+    }, "exact\nselection")).toBe(true);
+    expect(values.get("text/plain")).toBe("exact\nselection");
+    expect(prevented).toBe(true);
+  });
+
+  it("leaves the native copy path untouched without clipboard data", () => {
+    let prevented = false;
+    expect(writeSelectionToClipboardEvent({
+      clipboardData: null,
+      preventDefault: () => { prevented = true; },
+    }, "selection")).toBe(false);
+    expect(prevented).toBe(false);
   });
 });
