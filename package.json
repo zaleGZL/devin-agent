@@ -1,0 +1,23 @@
+{
+  "name": "devin-coding-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop coding agent powered by Devin CLI",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @devin-agent/desktop dev",
+    "typecheck": "pnpm --filter @devin-agent/desktop typecheck",
+    "lint": "pnpm --filter @devin-agent/desktop lint",
+    "test": "pnpm --filter @devin-agent/desktop test",
+    "build": "pnpm --filter @devin-agent/desktop build",
+    "pack": "pnpm --filter @devin-agent/desktop run pack",
+    "pack:mac": "node scripts/package-mac-arm64.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "check:independence": "node scripts/check-independence.mjs",
+    "publish:desktop": "node scripts/publish-desktop.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
