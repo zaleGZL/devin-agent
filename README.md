@@ -28,8 +28,11 @@ through ACP.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) `>= 22.19.0`
-- [pnpm](https://pnpm.io/) `10.x`
+- A current [pnpm](https://pnpm.io/) release; the repository does not pin a pnpm version
 - [Devin CLI](https://docs.devin.ai/cli/) installed and authenticated (`devin auth login`)
+
+Activate Node.js `>= 22.19.0` before invoking pnpm. The repository uses the pnpm executable
+from your environment instead of selecting or enforcing a package-manager version.
 
 ## Quick start
 
@@ -62,6 +65,7 @@ DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 ```bash
 pnpm build              # build electron + renderer
 pnpm pack               # local unsigned pack
+pnpm pack:mac           # build an unsigned Apple Silicon DMG, copy it to Downloads, and open Finder
 ```
 
 ## Release

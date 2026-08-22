@@ -12,6 +12,7 @@ pnpm dev                  # start dev (Vite + Electron)
 pnpm check                # typecheck + lint + test + build
 pnpm check:independence   # ensure no DSCode checkout / @thinkany/dscode-* references
 pnpm pack                 # local pack (unsigned)
+pnpm pack:mac             # unsigned Apple Silicon DMG → Downloads, then open Finder
 pnpm publish:desktop      # read version from apps/desktop/package.json → tag → push → CI publishes Release
 ```
 

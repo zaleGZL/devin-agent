@@ -26,8 +26,11 @@ Devin Coding Agent 是一个原生桌面客户端，通过 [Agent Client Protoco
 ## 前置条件
 
 - [Node.js](https://nodejs.org/) `>= 22.19.0`
-- [pnpm](https://pnpm.io/) `10.x`
+- 当前稳定版 [pnpm](https://pnpm.io/)；仓库不锁定 pnpm 版本
 - 已安装 [Devin CLI](https://docs.devin.ai/cli/) 并完成认证（`devin auth login`）
+
+运行 pnpm 前必须先启用 Node.js `>= 22.19.0`。仓库直接使用当前环境中的 pnpm，
+不会自行选择或强制指定包管理器版本。
 
 ## 快速开始
 
@@ -60,6 +63,7 @@ DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 ```bash
 pnpm build              # 构建 electron + renderer
 pnpm pack               # 本地未签名打包
+pnpm pack:mac           # 构建未签名 Apple Silicon DMG，复制到 Downloads 并打开 Finder
 ```
 
 ## 发布

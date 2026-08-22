@@ -4,7 +4,6 @@
   "private": true,
   "description": "Desktop coding agent powered by Devin CLI",
   "license": "MIT",
-  "packageManager": "pnpm@10.12.2",
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @devin-agent/desktop dev",
