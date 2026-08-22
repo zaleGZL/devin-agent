@@ -109,7 +109,11 @@ import {
   type ToolActivity,
   type TurnWorkEntry,
 } from "./lib/conversation";
-import { formatPromptWithAnnotations } from "./lib/annotations";
+import {
+  formatPromptWithAnnotations,
+  prepareAnnotationSelection,
+  writeSelectionToClipboardEvent,
+} from "./lib/annotations";
 import { sameWorkspaceChanges } from "./lib/git-changes";
 import { parseUnifiedDiff } from "./lib/git-diff";
 import devinDesktopIcon from "./assets/devin-desktop-icon.png";
@@ -184,6 +188,7 @@ function nextMentionOptionIndex(options: readonly MentionMenuOption[], current: 
 
 interface AnnotationSelection {
   text: string;
+  clipboardText: string;
   range: Range;
   left: number;
   top: number;
@@ -1134,21 +1139,60 @@ export default function App() {
       : node.parentElement;
     const startSource = elementForNode(range.startContainer)?.closest<HTMLElement>("[data-annotation-source]");
     const endSource = elementForNode(range.endContainer)?.closest<HTMLElement>("[data-annotation-source]");
-    const text = selection.toString().replace(/\s+/g, " ").trim();
-    if (!startSource || startSource !== endSource || !text) {
+    const preparedSelection = prepareAnnotationSelection(selection.toString());
+    if (!startSource || startSource !== endSource || !preparedSelection.annotationText) {
       setAnnotationSelection(undefined);
       return;
     }
     const rect = range.getBoundingClientRect();
     if (!rect.width && !rect.height) return;
-    const toolbarWidth = 250;
+    const toolbarWidth = 300;
     setAnnotationSelection({
-      text,
+      text: preparedSelection.annotationText,
+      clipboardText: preparedSelection.clipboardText,
       range: range.cloneRange(),
       left: Math.max(10, Math.min(window.innerWidth - toolbarWidth - 10, rect.left + rect.width / 2 - toolbarWidth / 2)),
       top: rect.top > 58 ? rect.top - 48 : rect.bottom + 10,
     });
   }, []);
+
+  useEffect(() => {
+    if (!annotationSelection) return;
+    const copySelection = (event: globalThis.ClipboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.matches("input, textarea") || target.isContentEditable)) return;
+      writeSelectionToClipboardEvent(event, annotationSelection.clipboardText);
+    };
+    document.addEventListener("copy", copySelection);
+    return () => document.removeEventListener("copy", copySelection);
+  }, [annotationSelection]);
+
+  const copyAnnotationSelection = useCallback(async () => {
+    if (!annotationSelection) return;
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(annotationSelection.clipboardText);
+        copied = true;
+      }
+    } catch {
+      // Fall back to Chromium's native copy command below.
+    }
+    if (!copied) {
+      try {
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(annotationSelection.range.cloneRange());
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      }
+    }
+    setToast({
+      message: t(copied ? "annotation.copied" : "annotation.copyFailed"),
+      type: copied ? "info" : "error",
+    });
+  }, [annotationSelection, t]);
 
   const addSelectionAnnotation = useCallback((withComment: boolean) => {
     if (!annotationSelection) return;
@@ -2890,6 +2934,7 @@ export default function App() {
           style={{ left: annotationSelection.left, top: annotationSelection.top }}
           onMouseDown={(event) => event.preventDefault()}
         >
+          <button type="button" onClick={() => void copyAnnotationSelection()}>{t("annotation.copy")}</button>
           <button type="button" onClick={() => addSelectionAnnotation(false)}>{t("annotation.addToChat")}</button>
           <button type="button" onClick={() => addSelectionAnnotation(true)}>{t("annotation.moreDetails")}</button>
         </div>
