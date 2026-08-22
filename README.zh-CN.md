@@ -15,6 +15,12 @@
 Devin Coding Agent 是一个原生桌面客户端，通过 [Agent Client Protocol (ACP)](https://docs.devin.ai/cli/)
 连接到 Devin CLI。应用不捆绑或重新分发 Devin CLI 二进制文件——你自行安装并认证 CLI，应用通过 ACP 驱动它。
 
+## 下载
+
+请前往项目的 [GitHub Releases 页面](https://github.com/zaleGZL/devin-agent/releases)下载最新的
+macOS 和 Linux 安装包。Apple Silicon Mac 选择 `arm64`，Intel Mac 选择 `x64`。安装包当前未签名；
+macOS 安装方法见下文。
+
 ## 功能
 
 - 工作区管理，支持多个 Devin session

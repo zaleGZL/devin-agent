@@ -75,10 +75,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Package unsigned verification artifacts
+      - name: Package unsigned artifacts
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish onTagOrDraft
+        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never
       - name: Smoke test packaged application
         if: runner.os != 'Linux'
         run: pnpm --dir apps/desktop smoke:packaged
@@ -94,3 +94,54 @@ jobs:
             apps/desktop/release/*.deb
             apps/desktop/release/*.rpm
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: package
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: devin-agent-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          dmg=(release-artifacts/*.dmg)
+          zip=(release-artifacts/*.zip)
+          deb=(release-artifacts/*.deb)
+          rpm=(release-artifacts/*.rpm)
+
+          if [[ ${#dmg[@]} -ne 2 || ${#zip[@]} -ne 2 || ${#deb[@]} -ne 1 || ${#rpm[@]} -ne 1 ]]; then
+            echo "Expected 2 DMGs, 2 ZIPs, 1 DEB, and 1 RPM." >&2
+            find release-artifacts -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+
+          tag="$GITHUB_REF_NAME"
+          version="${tag#desktop-v}"
+          title="Devin Agent Desktop v${version}"
+          assets=("${dmg[@]}" "${zip[@]}" "${deb[@]}" "${rpm[@]}")
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$title" \
+              --generate-notes \
+              --draft
+          fi
+
+          gh release edit "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --draft=false \
+            --latest

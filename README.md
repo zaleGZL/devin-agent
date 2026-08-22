@@ -17,6 +17,13 @@ Devin Coding Agent is a native desktop client that connects to the Devin CLI via
 the Devin CLI binary — you install and authenticate the CLI yourself, and the app drives it
 through ACP.
 
+## Download
+
+Download the latest macOS and Linux installers from the project's
+[GitHub Releases page](https://github.com/zaleGZL/devin-agent/releases). Choose `arm64` for an
+Apple Silicon Mac or `x64` for an Intel Mac. The installers are currently unsigned; macOS
+installation instructions are included below.
+
 ## Features
 
 - Workspace management with multiple Devin sessions
