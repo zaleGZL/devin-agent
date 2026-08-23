@@ -17,6 +17,11 @@ export interface PermissionToolSnapshot {
   args?: unknown;
 }
 
+export function planForNextTurn<T extends StructuredPlan>(plan: T | undefined): T | undefined {
+  if (!plan || plan.steps.some((item) => item.status !== "completed")) return plan;
+  return undefined;
+}
+
 export function parseStructuredPlan(value: unknown): StructuredPlan | undefined {
   let input = value;
   if (typeof input === "string") {

@@ -126,6 +126,7 @@ import {
   formatPlanRevisionPrompt,
   parseExitPlanPermission,
   parseStructuredPlan,
+  planForNextTurn,
   type PlanStepStatus,
   type StructuredPlan,
 } from "./lib/plan";
@@ -134,7 +135,18 @@ import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
 import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
-import { addMention, findAtTrigger, mergeRootMentionOptions, rankSkillMentions, removeAtTrigger } from "./lib/mentions";
+import {
+  findAtTrigger,
+  insertMentionAtTrigger,
+  mentionDisplayText,
+  mergeRootMentionOptions,
+  rankSkillMentions,
+  removePositionedMention,
+  replaceDraftRange,
+  splitMentionText,
+  type PositionedMention,
+} from "./lib/mentions";
+import { InlineMentionEditor, type InlineMentionEditorHandle } from "./lib/inline-mention-editor";
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import { partitionSidebarSessions } from "./lib/sidebar-sessions";
 import { clearSessionUnread, markBackgroundSessionUnread } from "./lib/session-attention";
@@ -165,7 +177,7 @@ interface QueuedPrompt {
   text: string;
   images: ChatImage[];
   annotations?: ChatAnnotation[];
-  mentions?: MentionRef[];
+  mentions?: PositionedMention[];
 }
 
 interface MentionMenuOption {
@@ -285,7 +297,7 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [draftAnnotations, setDraftAnnotations] = useState<ChatAnnotation[]>([]);
-  const [draftMentions, setDraftMentions] = useState<MentionRef[]>([]);
+  const [draftMentions, setDraftMentions] = useState<PositionedMention[]>([]);
   const [mentionMenu, setMentionMenu] = useState<{ category?: MentionKind; activeIndex: number }>();
   const [mentionResults, setMentionResults] = useState<MentionSearchResult[]>([]);
   const [availableSkills, setAvailableSkills] = useState<SkillMentionRef[]>([]);
@@ -333,7 +345,7 @@ export default function App() {
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<InlineMentionEditorHandle>(null);
   const composingRef = useRef(false);
   const mentionRequestRef = useRef(0);
   const skillRequestRef = useRef(0);
@@ -371,7 +383,7 @@ export default function App() {
   const sidebarDragRef = useRef<SidebarDragSnapshot | undefined>(undefined);
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
   const activeFollowUps = activeSession ? followUpQueues.get(activeSession) ?? [] : [];
-  const mentionTrigger = findAtTrigger(draft, textareaRef.current?.selectionStart ?? draft.length);
+  const mentionTrigger = findAtTrigger(draft, textareaRef.current?.getCaret() ?? draft.length, draftMentions);
   const mentionQuery = mentionTrigger?.query ?? "";
   const mentionOptions = useMemo<MentionMenuOption[]>(() => {
     const query = mentionQuery.toLocaleLowerCase();
@@ -1499,6 +1511,7 @@ export default function App() {
       || (prompt.mentions?.length ? prompt.mentions.map((mention) => `@${mention.label}`).join(" ") : "")
       || (annotations.length > 0 ? t("annotation.defaultRequest") : t("composer.attachedImage"));
     followingConversationTailRef.current = targetSessionId === activeSessionRef.current;
+    if (targetSessionId === activeSessionRef.current) setAgentPlan(planForNextTurn);
     updateSessionMessages(targetSessionId, (current) => [
       ...current,
       optimisticUserMessage(displayText, false, prompt.images, annotations, prompt.mentions ?? []),
@@ -1758,33 +1771,36 @@ export default function App() {
       window.clearTimeout(mentionBlurTimerRef.current);
       mentionBlurTimerRef.current = undefined;
     }
-    const caret = textareaRef.current?.selectionStart ?? draft.length;
+    const caret = textareaRef.current?.getCaret() ?? draft.length;
     if (option.category) {
-      const nextDraft = `${draft.slice(0, mentionTrigger.start)}@${draft.slice(caret)}`;
-      setDraft(nextDraft);
+      const next = replaceDraftRange(draft, draftMentions, mentionTrigger.start, caret, "@");
+      setDraft(next.value);
+      setDraftMentions(next.mentions);
       setMentionMenu({ category: option.category, activeIndex: 0 });
       window.requestAnimationFrame(() => {
         textareaRef.current?.focus();
-        textareaRef.current?.setSelectionRange(mentionTrigger.start + 1, mentionTrigger.start + 1);
+        textareaRef.current?.setCaret(next.caret);
       });
       return;
     }
     if (!option.mention) return;
     if (option.mention.kind === "file" && option.mention.sensitive && !window.confirm(t("mentions.sensitiveConfirm", { path: option.mention.path }))) return;
-    const nextDraft = removeAtTrigger(draft, mentionTrigger, caret);
-    setDraft(nextDraft);
-    setDraftMentions((current) => addMention(current, option.mention!));
+    const next = insertMentionAtTrigger(draft, draftMentions, option.mention, mentionTrigger, caret);
+    setDraft(next.value);
+    setDraftMentions(next.mentions);
     setMentionMenu(undefined);
     setMentionResults([]);
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setCaret(next.caret);
+    });
   };
 
-  const handleDraftChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    const value = event.target.value;
-    const caret = event.target.selectionStart;
+  const handleDraftChange = (value: string, mentions: PositionedMention[], caret: number) => {
     setDraft(value);
+    setDraftMentions(mentions);
     if (composingRef.current) return;
-    const trigger = findAtTrigger(value, caret);
+    const trigger = findAtTrigger(value, caret, mentions);
     if (!trigger) {
       setMentionMenu(undefined);
       return;
@@ -1792,7 +1808,7 @@ export default function App() {
     setMentionMenu((current) => current ? { ...current, activeIndex: 0 } : { activeIndex: 0 });
   };
 
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (mentionMenu && !event.nativeEvent.isComposing) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -1819,14 +1835,28 @@ export default function App() {
         return;
       }
     }
-    if (event.key === "Backspace" && !draft && draftMentions.length > 0) {
+    const caret = textareaRef.current?.getCaret() ?? draft.length;
+    const adjacentMention = event.key === "Backspace"
+      ? draftMentions.find((mention) => mention.end === caret)
+      : event.key === "Delete"
+        ? draftMentions.find((mention) => mention.start === caret)
+        : undefined;
+    if (!mentionMenu && adjacentMention) {
       event.preventDefault();
-      setDraftMentions((current) => current.slice(0, -1));
+      const next = removePositionedMention(draft, draftMentions, adjacentMention.id);
+      setDraft(next.value);
+      setDraftMentions(next.mentions);
+      window.requestAnimationFrame(() => textareaRef.current?.setCaret(next.caret));
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void sendMessage({ interrupt: event.metaKey || event.ctrlKey });
+      return;
+    }
+    if (event.key === "Enter" && event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      textareaRef.current?.insertText("\n");
     }
   };
 
@@ -1850,7 +1880,7 @@ export default function App() {
     event.target.value = "";
   };
 
-  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const handleComposerPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const images = Array.from(event.clipboardData.files).filter((file) => SUPPORTED_IMAGE_TYPES.has(file.type));
     if (images.length === 0) return;
     if (!imagePromptEnabled) {
@@ -2706,21 +2736,6 @@ export default function App() {
                   </div>
                 )}
                 <div className={`composer ${running ? "composer-running" : ""}`}>
-                  {draftMentions.length > 0 && (
-                    <div className="mention-token-list" aria-label={t("mentions.attached")}>
-                      {draftMentions.map((mention) => (
-                        <span className={`mention-token mention-${mention.kind}`} key={mention.id}>
-                          {mention.kind === "file" ? <FileIcon size={13} /> : mention.kind === "directory" ? <Folder size={13} /> : <Sparkles size={13} />}
-                          <span>@{mention.label}{mention.kind === "directory" ? "/" : ""}</span>
-                          <button
-                            type="button"
-                            onClick={() => setDraftMentions((current) => current.filter((item) => item.id !== mention.id))}
-                            aria-label={t("mentions.remove", { label: mention.label })}
-                          ><X size={12} /></button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
                   {draftAnnotations.length > 0 && (
                     <div className="annotation-chip-wrap">
                       <div className="annotation-preview" role="tooltip">
@@ -2765,16 +2780,18 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  <textarea
+                  <InlineMentionEditor
                     ref={textareaRef}
                     value={draft}
+                    mentions={draftMentions}
                     onChange={handleDraftChange}
                     onKeyDown={handleComposerKeyDown}
                     onPaste={handleComposerPaste}
                     onCompositionStart={() => { composingRef.current = true; }}
-                    onCompositionEnd={(event) => {
+                    onCompositionEnd={(value, mentions, caret) => {
                       composingRef.current = false;
-                      const trigger = findAtTrigger(event.currentTarget.value, event.currentTarget.selectionStart);
+                      handleDraftChange(value, mentions, caret);
+                      const trigger = findAtTrigger(value, caret, mentions);
                       setMentionMenu((current) => trigger ? { ...current, activeIndex: 0 } : undefined);
                     }}
                     onBlur={() => {
@@ -2790,7 +2807,6 @@ export default function App() {
                     aria-activedescendant={mentionMenu && mentionOptions[mentionMenu.activeIndex] ? `mention-option-${mentionOptions[mentionMenu.activeIndex]!.id}` : undefined}
                     placeholder={sessionLocked ? "This Devin session is locked and read-only." : running ? t("composer.runningPrompt") : t("composer.prompt")}
                     disabled={sessionLocked}
-                    rows={1}
                   />
                   {mentionMenu && mentionTrigger && (
                     <div className="mention-menu" role="dialog" aria-label={t("mentions.menu")}>
@@ -3274,20 +3290,25 @@ function EmptyState({ workspace, onSuggest }: { workspace?: string; onSuggest(va
   );
 }
 
+function InlineMentionText({ text, mentions }: { text: string; mentions: readonly MentionRef[] }) {
+  return splitMentionText(text, mentions).map((segment, index) => segment.type === "text"
+    ? <span key={`text-${index}`}>{segment.text}</span>
+    : <MentionTag key={`${segment.mention.id}-${index}`} mention={segment.mention} />);
+}
+
+function MentionTag({ mention }: { mention: MentionRef }) {
+  return (
+    <span className={`message-mention mention-${mention.kind}`}>
+      {mention.kind === "file" ? <FileIcon size={12} /> : mention.kind === "directory" ? <Folder size={12} /> : <Sparkles size={12} />}
+      <span>{mentionDisplayText(mention)}</span>
+    </span>
+  );
+}
+
 function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(image: PreviewImage): void }) {
   const { t } = useI18n();
   return (
     <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
-      {message.mentions && message.mentions.length > 0 && (
-        <div className="message-mention-list" aria-label={t("mentions.attached")}>
-          {message.mentions.map((mention) => (
-            <span className={`message-mention mention-${mention.kind}`} key={mention.id}>
-              {mention.kind === "file" ? <FileIcon size={12} /> : mention.kind === "directory" ? <Folder size={12} /> : <Sparkles size={12} />}
-              @{mention.label}{mention.kind === "directory" ? "/" : ""}
-            </span>
-          ))}
-        </div>
-      )}
       {message.annotations && message.annotations.length > 0 && (
         <details className="user-annotation-context">
           <summary><MessageSquareQuote size={13} />{t("annotation.count", { count: message.annotations.length })}</summary>
@@ -3317,7 +3338,11 @@ function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(i
           ))}
         </div>
       )}
-      {message.text && <div className="user-message-text">{message.text}</div>}
+      {(message.text || (message.mentions?.length ?? 0) > 0) && (
+        <div className="user-message-text">
+          <InlineMentionText text={message.text} mentions={message.mentions ?? []} />
+        </div>
+      )}
       {message.queued && <small>{t("status.queued")}</small>}
     </div>
   );
@@ -3464,8 +3489,11 @@ function FollowUpQueue({
                 </div>
               ) : (
                 <div className="follow-up-copy">
-                  <span>{item.value.text || (item.value.annotations?.length ? t("annotation.defaultRequest") : t("composer.attachedImage"))}</span>
-                  {item.value.mentions && item.value.mentions.length > 0 && <small>{item.value.mentions.map((mention) => `@${mention.label}${mention.kind === "directory" ? "/" : ""}`).join(" · ")}</small>}
+                  <span>
+                    {item.value.text || item.value.mentions?.length
+                      ? <InlineMentionText text={item.value.text} mentions={item.value.mentions ?? []} />
+                      : item.value.annotations?.length ? t("annotation.defaultRequest") : t("composer.attachedImage")}
+                  </span>
                   {item.value.annotations && item.value.annotations.length > 0 && <small>{t("annotation.count", { count: item.value.annotations.length })}</small>}
                   {item.value.images.length > 0 && <small>{t("queue.images", { count: item.value.images.length })}</small>}
                 </div>

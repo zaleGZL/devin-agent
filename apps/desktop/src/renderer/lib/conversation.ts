@@ -16,6 +16,7 @@ import type {
 import { toRawDiagnostic } from "./acp-normalizer";
 import { parsePromptAnnotations } from "./annotations";
 import type { MentionRef } from "../../shared/mentions";
+import { isPositionedMention } from "./mentions";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -340,9 +341,19 @@ function makeMessage(role: "user" | "assistant", text: string, event: { messageI
 
 function mergeMentions(current: readonly MentionRef[] | undefined, incoming: readonly MentionRef[] | undefined): MentionRef[] | undefined {
   if (!incoming || incoming.length === 0) return current ? [...current] : undefined;
-  const merged = new Map((current ?? []).map((mention) => [mention.id, mention]));
-  for (const mention of incoming) merged.set(mention.id, mention);
+  const merged = new Map((current ?? []).map((mention) => [mentionIdentity(mention), mention]));
+  for (const mention of incoming) {
+    const key = mentionIdentity(mention);
+    const existing = merged.get(key);
+    merged.set(key, existing && isPositionedMention(existing) ? { ...mention, ...existing } : mention);
+  }
   return [...merged.values()];
+}
+
+function mentionIdentity(mention: MentionRef): string {
+  return mention.kind === "skill"
+    ? `skill:${mention.command.toLocaleLowerCase()}`
+    : `${mention.kind}:${mention.path.toLocaleLowerCase()}`;
 }
 
 function makeThoughtMessage(event: Extract<AgentEvent, { type: "thought_chunk" }>): ChatMessage {

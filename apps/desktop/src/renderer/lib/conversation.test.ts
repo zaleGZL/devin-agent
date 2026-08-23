@@ -133,6 +133,22 @@ describe("conversation events", () => {
     expect(messages[0]?.annotations).toHaveLength(1);
   });
 
+  it("keeps an optimistic mention position when ACP echoes the same resource", () => {
+    const mention = { id: "file:guide", kind: "file" as const, label: "guide.md", path: "docs/guide.md", start: 7, end: 16 };
+    let messages = [optimisticUserMessage("Review @guide.md", false, [], [], [mention])];
+    messages = applyAgentEvent(messages, {
+      type: "message_chunk",
+      sessionId: "session-1",
+      role: "user",
+      text: "",
+      mentions: [{ id: "chunk-file-guide", kind: "file", label: "docs/guide.md", path: "docs/guide.md" }],
+      phase: "end",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.mentions).toEqual([mention]);
+  });
+
   it("correlates tool start and completion events", () => {
     let messages = applyAgentEvent([], { type: "tool_execution_start", toolCallId: "call-1", toolName: "apply_patch", args: {}, timestamp: 1_700_000_000_000 });
     expect(getAssistantActivity(messages)).toBe("tool");
