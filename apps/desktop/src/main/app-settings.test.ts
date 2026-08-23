@@ -117,4 +117,17 @@ describe("AppSettings", () => {
     await expect(settings.setNewSessionModelId("  ")).rejects.toThrow(/non-empty/i);
     await expect(settings.setNewSessionModelId("m".repeat(201))).rejects.toThrow(/non-empty/i);
   });
+
+  it("persists one global preferred mode without replacing other settings", async () => {
+    const settings = new AppSettings(file);
+    expect(await settings.getPreferredModeId()).toBeNull();
+
+    await settings.setLanguage("zh-CN");
+    await settings.setPreferredModeId("  bypass-permissions  ");
+
+    expect(await settings.getPreferredModeId()).toBe("bypass-permissions");
+    expect(await settings.getLanguage()).toBe("zh-CN");
+    await expect(settings.setPreferredModeId("  ")).rejects.toThrow(/non-empty/i);
+    await expect(settings.setPreferredModeId("m".repeat(201))).rejects.toThrow(/non-empty/i);
+  });
 });

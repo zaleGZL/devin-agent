@@ -7,6 +7,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
+import { isEditorLineBreakInput, isImeCompositionKey } from "./ime";
 import { mentionDisplayText, splitMentionText, type PositionedMention } from "./mentions";
 
 export interface InlineMentionEditorHandle {
@@ -48,7 +49,15 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
 }, forwardedRef) {
   const editorRef = useRef<HTMLDivElement>(null);
   const composing = useRef(false);
+  const compositionJustEnded = useRef(false);
+  const compositionGuardTimer = useRef<number | undefined>(undefined);
   const pendingCaret = useRef<number | undefined>(undefined);
+
+  const clearCompositionEndGuard = () => {
+    compositionJustEnded.current = false;
+    if (compositionGuardTimer.current !== undefined) window.clearTimeout(compositionGuardTimer.current);
+    compositionGuardTimer.current = undefined;
+  };
 
   const readValue = useCallback(() => {
     const editor = editorRef.current;
@@ -114,7 +123,18 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
       data-placeholder={placeholder}
       spellCheck
       onInput={() => { if (!composing.current) emitChange(); }}
-      onKeyDown={onKeyDown}
+      onBeforeInput={(event) => {
+        const inputType = (event.nativeEvent as InputEvent).inputType;
+        if (isEditorLineBreakInput(inputType)) event.preventDefault();
+      }}
+      onKeyDown={(event) => {
+        const justEndedWithEnter = compositionJustEnded.current && event.key === "Enter";
+        if (isImeCompositionKey(event.nativeEvent, composing.current, justEndedWithEnter)) {
+          if (justEndedWithEnter) clearCompositionEndGuard();
+          return;
+        }
+        onKeyDown(event);
+      }}
       onPaste={(event) => {
         onPaste(event);
         if (event.defaultPrevented) return;
@@ -124,16 +144,23 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
         insertText(text);
       }}
       onCompositionStart={() => {
+        clearCompositionEndGuard();
         composing.current = true;
         onCompositionStart();
       }}
       onCompositionEnd={() => {
         composing.current = false;
+        compositionJustEnded.current = true;
+        compositionGuardTimer.current = window.setTimeout(clearCompositionEndGuard, 100);
         const next = readValue();
         pendingCaret.current = next.caret;
         onCompositionEnd(next.value, next.mentions, next.caret);
       }}
-      onBlur={onBlur}
+      onBlur={() => {
+        composing.current = false;
+        clearCompositionEndGuard();
+        onBlur();
+      }}
       {...aria}
     />
   );
