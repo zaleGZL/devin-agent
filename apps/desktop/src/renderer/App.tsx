@@ -28,8 +28,10 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  Copy,
   CornerDownLeft,
   CornerDownRight,
+  Download,
   Ellipsis,
   ExternalLink,
   Eye,
@@ -135,6 +137,8 @@ import {
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
+import { markdownExportFileName } from "../shared/markdown-export";
+import { assistantResponseText, formatSessionMarkdown } from "./lib/session-export";
 import {
   beginChainConversation,
   chainConversationKey,
@@ -2443,6 +2447,18 @@ export default function App() {
   const sessionMenuItem = sessionMenu ? sessions.find((session) => session.id === sessionMenu.sessionId) : undefined;
   const projectMenuItem = projectMenu ? workspaces.find((item) => item.path === projectMenu.path) : undefined;
 
+  const downloadSessionMarkdown = async () => {
+    try {
+      const result = await window.devinAgent.app.saveMarkdown({
+        defaultName: markdownExportFileName(activeTitle),
+        content: formatSessionMarkdown(activeTitle, messages),
+      });
+      if (result.saved) setToast({ message: t("session.downloadedMarkdown"), type: "info" });
+    } catch (error) {
+      setToast({ message: t("session.downloadFailed", { error: cleanError(error instanceof Error ? error.message : String(error)) }), type: "error" });
+    }
+  };
+
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}${sidebarDrag ? " sidebar-is-dragging" : ""}`}>
       <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`} inert={!sidebarOpen}>
@@ -2787,6 +2803,16 @@ export default function App() {
                 <div className="thread-heading"><strong>{crop(activeTitle, 62)}</strong><span>{sessionLocked ? <Shield size={12} /> : workspace ? <GitBranch size={12} /> : <MessageSquareText size={12} />} {sessionLocked ? "Read-only Devin session" : workspaceName ?? t("status.regularTask")}</span></div>
               </div>
               <div className="header-actions">
+                <button
+                  type="button"
+                  className="icon-button session-download-button"
+                  onClick={() => void downloadSessionMarkdown()}
+                  disabled={loading || running || messages.length === 0}
+                  aria-label={t("session.downloadMarkdown")}
+                  title={t("session.downloadMarkdown")}
+                >
+                  <Download size={16} />
+                </button>
                 {workspace && <button
                   className={`changes-toolbar-button${inspectorOpen && inspectorMode === "changes" ? " selected" : ""}`}
                   onClick={() => inspectorOpen && inspectorMode === "changes" ? closePreviewPanel() : showChangesPanel()}
@@ -2852,6 +2878,7 @@ export default function App() {
                           active={group.id === activeAssistantGroupId}
                           showReasoningProcess={showReasoningProcess}
                           onPreviewFile={(filePath) => void openFilePreview(filePath)}
+                          onCopyError={() => setToast({ message: t("message.copyFailed"), type: "error" })}
                         />
                   ))}
                   {agentPlan && <EditablePlanCard plan={agentPlan} onSave={applyEditedPlan} />}
@@ -3741,13 +3768,33 @@ function AssistantTurn({
   active,
   showReasoningProcess,
   onPreviewFile,
+  onCopyError,
 }: {
   messages: ChatMessage[];
   active: boolean;
   showReasoningProcess: boolean;
   onPreviewFile(filePath: string): void;
+  onCopyError(): void;
 }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
   const { work, responses } = splitAssistantTurn(messages, active);
+  const copyText = assistantResponseText(messages);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_800);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const copyResponse = async () => {
+    try {
+      await window.devinAgent.app.copyText(copyText);
+      setCopied(true);
+    } catch {
+      onCopyError();
+    }
+  };
 
   return (
     <article className="assistant-message">
@@ -3766,6 +3813,14 @@ function AssistantTurn({
           {response.streaming && <span className="stream-cursor" />}
         </div>
       ))}
+      {!active && copyText && (
+        <div className="assistant-response-actions">
+          <button type="button" className="assistant-copy-action" onClick={() => void copyResponse()} aria-label={copied ? t("message.copied") : t("message.copyResponse")}>
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copied ? t("message.copied") : t("message.copy")}</span>
+          </button>
+        </div>
+      )}
     </article>
   );
 }

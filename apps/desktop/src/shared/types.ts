@@ -1,6 +1,7 @@
 /** Public types shared by the Electron preload and React renderer. */
 
 import type { DevinCapabilities } from "./capabilities";
+import type { MarkdownExportRequest, MarkdownExportResult } from "./markdown-export";
 import type { MentionSearchRequest, MentionSearchResult, SkillListRequest, SkillMentionRef } from "./mentions";
 
 export const PROVIDER_IDS = ["devin"] as const;
@@ -197,6 +198,8 @@ export interface DesktopApi {
     version(): Promise<string>;
     homeDirectory(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    copyText(text: string): Promise<void>;
+    saveMarkdown(request: MarkdownExportRequest): Promise<MarkdownExportResult>;
   };
   settings: {
     getColorScheme(): Promise<ColorSchemePreference>;

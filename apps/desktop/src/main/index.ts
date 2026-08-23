@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -66,6 +67,7 @@ import type {
   UserProfile,
 } from "../shared/types";
 import { parseMentionSearchRequest, parseSkillListRequest } from "../shared/mentions";
+import { MARKDOWN_EXPORT_MAX_CHARACTERS, parseMarkdownExportRequest } from "../shared/markdown-export";
 import { capabilityAdvertised, type JsonObject, type PromptContent } from "../shared/acp-types";
 import {
   normalizePermissionOptions,
@@ -669,6 +671,22 @@ function registerIpc(): void {
     const url = expectString(value, "url", 4_096);
     if (!isSafeExternalUrl(url)) throw new Error("Only http(s) links can be opened");
     await shell.openExternal(url);
+  });
+  ipcMain.handle("app:copy-text", (_event, value: unknown) => {
+    clipboard.writeText(expectString(value, "clipboard text", MARKDOWN_EXPORT_MAX_CHARACTERS));
+  });
+  ipcMain.handle("app:save-markdown", async (ipcEvent, value: unknown) => {
+    const request = parseMarkdownExportRequest(value);
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showSaveDialog(parent!, {
+      title: "Download session as Markdown",
+      defaultPath: path.join(app.getPath("downloads"), request.defaultName),
+      buttonLabel: "Save",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (result.canceled || !result.filePath) return { saved: false };
+    await fsp.writeFile(result.filePath, request.content, "utf8");
+    return { saved: true, filePath: result.filePath };
   });
 
   ipcMain.handle("settings:get-color-scheme", () => appSettings.getColorScheme());

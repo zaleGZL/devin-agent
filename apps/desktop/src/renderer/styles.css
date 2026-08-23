@@ -248,6 +248,11 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .assistant-message { margin-bottom: 34px; line-height: 1.62; font-size: 14px; overflow-wrap: anywhere; }
 .assistant-message:last-child { margin-bottom: 8px; }
 .assistant-response + .assistant-response { margin-top: 13px; }
+.assistant-response-actions { min-height: 28px; margin-top: 8px; display: flex; align-items: center; }
+.assistant-copy-action { height: 28px; padding: 0 7px; display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; color: var(--faint); font-size: 10.5px; font-weight: 540; transition: color .14s ease, background-color .14s ease; }
+.assistant-copy-action:hover { color: var(--ink); background: var(--hover); }
+.assistant-copy-action:focus-visible { color: var(--ink); outline: 2px solid color-mix(in srgb, var(--focus) 58%, transparent); outline-offset: 1px; }
+.assistant-copy-action svg { flex: none; }
 ::highlight(devin-agent-response-annotations) { color: var(--ink); background: color-mix(in srgb, var(--focus) 58%, transparent); }
 .annotation-selection-toolbar { position: fixed; z-index: 120; display: flex; overflow: hidden; border: 1px solid color-mix(in srgb, var(--line) 82%, var(--ink)); border-radius: 10px; background: color-mix(in srgb, var(--surface) 96%, var(--canvas)); box-shadow: 0 8px 24px rgba(18,18,16,.22); }
 .annotation-selection-toolbar button { height: 34px; padding: 0 13px; color: var(--ink); font-size: 12px; font-weight: 540; white-space: nowrap; }

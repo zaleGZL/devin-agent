@@ -33,6 +33,8 @@ export function createPreviewApi(): DesktopApi {
       version: async () => "0.1.0-preview",
       homeDirectory: async () => "/Users/demo",
       openExternal: async () => undefined,
+      copyText: async () => undefined,
+      saveMarkdown: async () => ({ saved: false }),
     },
     settings: {
       getColorScheme: async () => "system",
