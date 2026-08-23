@@ -4,7 +4,29 @@ import {
   formatPlanRevisionPrompt,
   parseExitPlanPermission,
   parseStructuredPlan,
+  planForNextTurn,
 } from "./plan";
+
+describe("planForNextTurn", () => {
+  it("clears a completed plan when the next user turn starts", () => {
+    expect(planForNextTurn({
+      steps: [
+        { step: "Implement", status: "completed" },
+        { step: "Verify", status: "completed" },
+      ],
+    })).toBeUndefined();
+  });
+
+  it("keeps an unfinished plan across user turns", () => {
+    const plan = {
+      steps: [
+        { step: "Implement", status: "completed" as const },
+        { step: "Verify", status: "pending" as const },
+      ],
+    };
+    expect(planForNextTurn(plan)).toBe(plan);
+  });
+});
 
 describe("parseStructuredPlan", () => {
   const plan = {

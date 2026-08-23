@@ -226,9 +226,9 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .user-message.has-images { max-width: min(80%, 440px); padding: 6px; }
 .user-message.has-images .user-message-text { padding: 5px 7px 3px; }
 .user-message.has-images small { padding: 0 7px 2px; }
-.message-mention-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; margin-bottom: 7px; }
-.message-mention { max-width: 310px; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--line-soft); color: var(--muted); font-size: 10.5px; white-space: nowrap; text-overflow: ellipsis; }
+.message-mention { max-width: 310px; height: 24px; display: inline-flex; align-items: center; gap: 5px; margin: 0 2px; padding: 0 7px; overflow: hidden; vertical-align: -6px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--line-soft); color: var(--muted); font-size: 10.5px; white-space: nowrap; text-overflow: ellipsis; }
 .message-mention svg { flex: none; }
+.message-mention > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .user-annotation-context { min-width: 220px; max-width: 520px; margin: 0 0 8px; padding: 7px 9px; border: 1px solid var(--line-soft); border-radius: 9px; background: color-mix(in srgb, var(--canvas) 72%, var(--surface)); white-space: normal; }
 .user-annotation-context summary { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 620; cursor: pointer; list-style: none; }
 .user-annotation-context summary::-webkit-details-marker { display: none; }
@@ -397,12 +397,9 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .composer { position: relative; z-index: 1; width: 100%; padding: 8px; border: 1px solid var(--composer-border); background: var(--surface); border-radius: 13px; box-shadow: 0 4px 18px rgba(33,33,29,.07); pointer-events: auto; transition: border-color .15s, box-shadow .15s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--focus) 58%, var(--line)); box-shadow: 0 4px 20px rgba(33,33,29,.08), 0 0 0 2px color-mix(in srgb, var(--focus) 9%, transparent); }
 .composer-running { border-left-color: color-mix(in srgb, var(--focus) 60%, var(--line)); }
-.mention-token-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 1px 5px 5px; }
-.mention-token { max-width: min(340px, 100%); height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 3px 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--line-soft); color: var(--muted); font-size: 11px; }
-.mention-token > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mention-token > svg { flex: none; }
-.mention-token > button { width: 21px; height: 21px; flex: none; display: grid; place-items: center; border-radius: 6px; }
-.mention-token > button:hover { color: var(--ink); background: var(--hover); }
+.composer-mention { max-width: min(340px, 100%); height: 25px; display: inline-flex; align-items: center; gap: 5px; margin: 0 2px; padding: 0 7px; overflow: hidden; vertical-align: -7px; border: 1px solid var(--line); border-radius: 7px; background: var(--line-soft); color: var(--muted); font-size: 11px; white-space: nowrap; user-select: all; }
+.composer-mention > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-mention > svg { flex: none; }
 .mention-menu { position: absolute; z-index: 55; left: 8px; bottom: calc(100% + 8px); width: min(430px, calc(100% - 16px)); max-height: min(390px, calc(100vh - 130px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .mention-menu-back { min-height: 35px; padding: 7px 11px; border-bottom: 1px solid var(--line-soft); color: var(--muted); text-align: left; font-size: 11px; font-weight: 600; }
 .mention-menu-back:hover { color: var(--ink); background: var(--line-soft); }
@@ -426,8 +423,9 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .annotation-preview-item strong { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10.5px; }
 .annotation-preview-item p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .annotation-preview-item small { display: block; margin-top: 6px; color: var(--muted); font-size: 10.5px; }
-.composer textarea { display: block; width: 100%; min-height: 45px; max-height: 190px; resize: none; border: 0; outline: 0; background: transparent; padding: 5px 6px 8px; line-height: 1.5; field-sizing: content; font-size: 14px; }
-.composer textarea::placeholder { color: var(--faint); }
+.inline-mention-editor { display: block; width: 100%; min-height: 45px; max-height: 190px; overflow-y: auto; border: 0; outline: 0; background: transparent; padding: 5px 6px 8px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inline-mention-editor:empty::before { color: var(--faint); content: attr(data-placeholder); pointer-events: none; }
+.inline-mention-editor[aria-disabled="true"] { cursor: default; }
 .composer-toolbar { height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .composer-tools { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: visible; }
 .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
