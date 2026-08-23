@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentSnapshot,
+  buildCapabilityProbeSnapshot,
   isRuntimePromptRunning,
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
@@ -55,6 +56,26 @@ describe("runtime adapter", () => {
       expect.objectContaining({ id: "plan", name: "Plan" }),
     ]);
     expect(snapshot.capabilities?.prompt).toMatchObject({ image: true, audio: false });
+  });
+
+  it("keeps probed selectors but deletes the temporary ACP session", async () => {
+    const deleted: string[] = [];
+    const snapshot = await buildCapabilityProbeSnapshot({}, {
+      sessionId: "temporary-session",
+      modes: { currentModeId: "smart", availableModes: [{ id: "smart", name: "Smart" }] },
+      configOptions: [{
+        id: "model",
+        type: "select",
+        currentValue: "adaptive",
+        options: [{ value: "adaptive", name: "Adaptive" }, { value: "opus", name: "Opus" }],
+      }],
+    }, async (sessionId) => { deleted.push(sessionId); });
+
+    expect(deleted).toEqual(["temporary-session"]);
+    expect(snapshot.sessionId).toBeUndefined();
+    expect(snapshot.models.map((model) => model.id)).toEqual(["adaptive", "opus"]);
+    expect(snapshot.modes?.map((mode) => mode.id)).toEqual(["smart"]);
+    expect(snapshot.state.isStreaming).toBe(false);
   });
 
   it("preserves locked session state and maps server ids without provider routing", () => {

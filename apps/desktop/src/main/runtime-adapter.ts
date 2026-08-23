@@ -113,6 +113,21 @@ export function buildAgentSnapshot(
   };
 }
 
+/** Discover session-scoped selectors without retaining an empty user task. */
+export async function buildCapabilityProbeSnapshot(
+  initializeCapabilities: unknown,
+  session: RuntimeSessionLike,
+  deleteSession: (sessionId: string) => Promise<void>,
+  requestedModel?: string,
+): Promise<AgentSnapshot> {
+  const snapshot = buildAgentSnapshot(initializeCapabilities, session, requestedModel);
+  if (!snapshot.sessionId) throw new Error("Devin ACP capability discovery did not return a temporary session id");
+  await deleteSession(snapshot.sessionId);
+  delete snapshot.sessionId;
+  snapshot.state.isStreaming = false;
+  return snapshot;
+}
+
 export function mapRuntimeSessionSummary(value: unknown, fallbackCwd = ""): SessionSummary | undefined {
   if (!isRecord(value)) return undefined;
   const id = stringValue(value.sessionId).trim();
