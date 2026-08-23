@@ -42,6 +42,7 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     recent: () => ipcRenderer.invoke("workspace:recent"),
     forget: (workspacePath) => ipcRenderer.invoke("workspace:forget", workspacePath),
     reorder: (workspacePaths) => ipcRenderer.invoke("workspace:reorder", workspacePaths),
+    rename: (workspacePath, name) => ipcRenderer.invoke("workspace:rename", workspacePath, name),
     openInDevin: (workspacePath) => ipcRenderer.invoke("workspace:open-in-devin", workspacePath),
     changes: (workspacePath) => ipcRenderer.invoke("workspace:changes", workspacePath),
     diff: (workspacePath, filePath) => ipcRenderer.invoke("workspace:diff", workspacePath, filePath),
