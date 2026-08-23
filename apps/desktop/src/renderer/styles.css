@@ -157,6 +157,7 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .open-in-devin-button:focus-visible { outline: 0; border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 20%, transparent); }
 .changes-toolbar-button { height: 30px; min-width: 34px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--muted); font-size: 11px; font-weight: 570; transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
 .changes-toolbar-button:hover, .changes-toolbar-button.selected { border-color: color-mix(in srgb, var(--line) 50%, var(--ink)); background: var(--hover); color: var(--ink); }
+.changes-toolbar-branch { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .changes-toolbar-button small { min-width: 16px; height: 16px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--on-accent); background: var(--accent); font-size: 9px; line-height: 1; }
 .devin-desktop-mark { width: 20px; height: 20px; display: grid; place-items: center; overflow: hidden; border-radius: 5px; background: #fff; }
 .devin-desktop-mark img { width: 18px; height: 18px; display: block; image-rendering: auto; }
