@@ -23,6 +23,15 @@ Real ACP smoke test (requires an authenticated Devin CLI):
 DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 ```
 
+## Branching workflow
+
+- The default development branch is `dev`. Do all day-to-day work on `dev`.
+- When a piece of work is complete, open a Merge Request (MR) from `dev` to `main`.
+- After the MR is merged into `main`, sync the latest `main` back into `dev`
+  (e.g. `git checkout dev && git merge main` or `git pull origin main`) so `dev`
+  stays up to date before starting the next change.
+- Do not commit directly to `main`; route changes through `dev` → MR → `main`.
+
 ## Architecture map
 
 ```
