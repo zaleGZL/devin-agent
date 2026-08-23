@@ -835,6 +835,27 @@ export default function App() {
     }
   }, [hydrateSnapshot, markSessionRunning, permission, provider, providers, refreshSessions, sandbox, selectActiveSession, t]);
 
+  const discoverNewTaskCapabilities = useCallback((
+    cwd: string,
+    projectPath: string | undefined,
+    providerId: ProviderId,
+    preferredModelId?: string,
+  ) => window.devinAgent.agent.start({
+    cwd,
+    project: Boolean(projectPath),
+    provider: providerId,
+    ...(preferredModelId ? { model: preferredModelId } : {}),
+    permission: "runtime",
+    sandbox: "cli-managed",
+    capabilitiesOnly: true,
+  }), []);
+
+  const hydrateNewTaskCapabilities = useCallback((snapshot: AgentSnapshot, preferredModelId?: string) => {
+    hydrateSnapshot(snapshot);
+    const stateModel = snapshot.state.model as { id?: string } | undefined;
+    setModel(resolveNewSessionModelId(preferredModelId, snapshot.models, stateModel?.id));
+  }, [hydrateSnapshot]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -861,9 +882,9 @@ export default function App() {
       applyColorScheme(storedColorScheme);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
         ?? providerItems.find((item) => item.configured);
+      const initialModelId = storedNewSessionModelId ?? configured?.defaultModel;
       if (configured) {
         setProvider(configured.id);
-        const initialModelId = storedNewSessionModelId ?? configured.defaultModel;
         if (initialModelId) setModel(initialModelId);
       }
       const launchSessionId = launchSessionIdRef.current;
@@ -901,13 +922,27 @@ export default function App() {
             setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
           }
         }
+      } else if (configured) {
+        try {
+          const snapshot = await discoverNewTaskCapabilities(
+            activeCwdRef.current,
+            selectedProject?.path,
+            configured.id,
+            initialModelId,
+          );
+          if (!cancelled) hydrateNewTaskCapabilities(snapshot, initialModelId);
+        } catch (error) {
+          if (!cancelled && !isAgentSessionClosedError(error)) {
+            setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+          }
+        }
       }
       if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [hydrateSnapshot, selectActiveSession]);
+  }, [discoverNewTaskCapabilities, hydrateNewTaskCapabilities, hydrateSnapshot, selectActiveSession]);
 
   useEffect(() => {
     const offEvent = window.devinAgent.agent.onEvent((event) => {
@@ -1298,6 +1333,7 @@ export default function App() {
 
   const createThreadInProject = async (projectPath?: string) => {
     const homeDirectory = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
+    setLoading(true);
     homeDirectoryRef.current = homeDirectory;
     const cwd = resolveNewTaskCwd(projectPath, homeDirectory);
     activeCwdRef.current = cwd;
@@ -1331,7 +1367,18 @@ export default function App() {
     setAttachments([]);
     clearDraftAnnotations();
     if (projectPath) setExpandedProjects((current) => new Set(current).add(projectPath));
-    textareaRef.current?.focus();
+    try {
+      const preferredModelId = newSessionModelIdRef.current ?? modelRef.current;
+      const snapshot = await discoverNewTaskCapabilities(cwd, projectPath, provider, preferredModelId);
+      hydrateNewTaskCapabilities(snapshot, preferredModelId);
+    } catch (error) {
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+    } finally {
+      setLoading(false);
+      textareaRef.current?.focus();
+    }
   };
 
   const clearWorkspace = async () => {

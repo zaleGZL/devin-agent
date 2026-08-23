@@ -123,6 +123,8 @@ export interface AgentStartOptions {
   sessionId?: string;
   /** Ask Devin ACP to replay the transcript even when this session is already known by the host. */
   replaySession?: boolean;
+  /** Create and immediately remove a temporary ACP session to discover models and modes. */
+  capabilitiesOnly?: boolean;
   additionalDirectories?: string[];
 }
 

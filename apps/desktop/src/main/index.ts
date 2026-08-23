@@ -36,6 +36,7 @@ import {
 } from "./session-index";
 import {
   buildAgentSnapshot,
+  buildCapabilityProbeSnapshot,
   isRuntimePromptRunning,
   mapRuntimeSessionSummary,
   permissionDecisionFromUi,
@@ -64,7 +65,7 @@ import type {
   UserProfile,
 } from "../shared/types";
 import { parseMentionSearchRequest, parseSkillListRequest } from "../shared/mentions";
-import type { PromptContent } from "../shared/acp-types";
+import { capabilityAdvertised, type PromptContent } from "../shared/acp-types";
 
 /**
  * The ACP implementation is owned by the runtime layer. The shell only relies
@@ -209,6 +210,15 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
     const startRuntime = async (options: AgentStartOptions): Promise<AgentSnapshot> => {
       const capabilities = await raw.start?.();
       const targetSessionId = options.sessionId ?? options.sessionPath;
+      if (options.capabilitiesOnly && targetSessionId) {
+        throw new Error("Capability discovery cannot load an existing Devin session");
+      }
+      if (options.capabilitiesOnly && (
+        !capabilityAdvertised(capabilities?.sessionCapabilities?.delete)
+        || typeof raw.deleteSession !== "function"
+      )) {
+        throw new Error("Current Devin ACP cannot safely discover new-task capabilities without retaining an empty session");
+      }
       const cwd = options.cwd ?? raw.session?.cwd;
       let session: Record<string, unknown> | undefined;
       if (targetSessionId) {
@@ -224,13 +234,21 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
         session = await raw.newSession?.(cwd, { additionalDirectories: options.additionalDirectories });
       }
       if (!session) throw new Error("Devin ACP did not return a session");
-      latestSnapshot = buildAgentSnapshot(capabilities ?? raw.negotiatedCapabilities, session, options.model || undefined);
-      latestSnapshot.state.isStreaming = raw.isPromptRunning === true;
+      const snapshot = options.capabilitiesOnly
+        ? await buildCapabilityProbeSnapshot(
+          capabilities ?? raw.negotiatedCapabilities,
+          session,
+          (sessionId) => raw.deleteSession(sessionId, session),
+          options.model || undefined,
+        )
+        : buildAgentSnapshot(capabilities ?? raw.negotiatedCapabilities, session, options.model || undefined);
+      latestSnapshot = snapshot;
+      latestSnapshot.state.isStreaming = options.capabilitiesOnly ? false : raw.isPromptRunning === true;
       return latestSnapshot;
     };
     return {
       start(options) {
-        const key = JSON.stringify([options.cwd, options.sessionId, options.sessionPath, options.additionalDirectories, options.model, options.replaySession]);
+        const key = JSON.stringify([options.cwd, options.sessionId, options.sessionPath, options.additionalDirectories, options.model, options.replaySession, options.capabilitiesOnly]);
         if (pendingRuntimeStart?.key === key) return pendingRuntimeStart.promise;
         const previous = pendingRuntimeStart?.promise.catch(() => undefined);
         const promise = (async () => {
@@ -675,11 +693,12 @@ function registerIpc(): void {
     }
     if (!agentHost?.start) throw new Error("Devin ACP runtime is not available. Install Devin CLI and restart the app.");
     const workspacePath = rendererWorkspaces.get(ipcEvent.sender.id);
-    const creatingNewSession = !options.sessionId && !options.sessionPath;
+    const creatingNewSession = !options.sessionId && !options.sessionPath && !options.capabilitiesOnly;
     const preparedSkills = creatingNewSession ? await skillIndex.refreshDraft(workspacePath) : undefined;
     if (creatingNewSession && workspacePath) await mentionIndex.refresh(workspacePath);
     const snapshot = await agentHost.start(options);
-    if (snapshot.sessionId) {
+    if (options.capabilitiesOnly) rendererSessionIds.delete(ipcEvent.sender.id);
+    if (!options.capabilitiesOnly && snapshot.sessionId) {
       if (preparedSkills) skillIndex.setSessionSnapshot(snapshot.sessionId, preparedSkills);
       else await skillIndex.bindSession(snapshot.sessionId, workspacePath);
       rendererSessionIds.set(ipcEvent.sender.id, snapshot.sessionId);
@@ -691,7 +710,7 @@ function registerIpc(): void {
         if (senderWindow) sessionWindows.set(snapshot.sessionId, senderWindow);
       }
     }
-    if (snapshot.sessionId && options.cwd) {
+    if (!options.capabilitiesOnly && snapshot.sessionId && options.cwd) {
       const now = new Date().toISOString();
       const existing = (await listSessions()).find((session) => session.id === snapshot.sessionId);
       const snapshotModel = snapshot.state.model as { id?: string } | undefined;
@@ -936,6 +955,7 @@ function expectAgentStartOptions(value: unknown): AgentStartOptions {
     ...(typeof data.sessionPath === "string" ? { sessionPath: data.sessionPath } : {}),
     ...(typeof data.sessionId === "string" ? { sessionId: data.sessionId } : {}),
     ...(data.replaySession === undefined ? {} : { replaySession: expectBoolean(data.replaySession, "replay session") }),
+    ...(data.capabilitiesOnly === undefined ? {} : { capabilitiesOnly: expectBoolean(data.capabilitiesOnly, "capabilities only") }),
     ...(Array.isArray(data.additionalDirectories)
       ? { additionalDirectories: data.additionalDirectories.map((entry) => expectString(entry, "additional directory", 4_096)).map((entry) => path.resolve(entry)).slice(0, 16) }
       : {}),
