@@ -23,6 +23,8 @@ import { serializeMentionPrompt } from "./mention-prompt";
 import { SkillIndex } from "./skill-index";
 import { AppSettings } from "./app-settings";
 import { RecentWorkspaces } from "./recent-workspaces";
+import { InteractionBroker } from "./interaction-broker";
+import { ElicitationUrlRegistry } from "./elicitation-url-registry";
 import {
   archiveSession,
   configureSessionIndex,
@@ -39,7 +41,6 @@ import {
   buildCapabilityProbeSnapshot,
   isRuntimePromptRunning,
   mapRuntimeSessionSummary,
-  permissionDecisionFromUi,
   resolveRuntimeCommandSessionId,
   resolveRuntimeSessionOpenAction,
 } from "./runtime-adapter";
@@ -65,7 +66,22 @@ import type {
   UserProfile,
 } from "../shared/types";
 import { parseMentionSearchRequest, parseSkillListRequest } from "../shared/mentions";
-import { capabilityAdvertised, type PromptContent } from "../shared/acp-types";
+import { capabilityAdvertised, type JsonObject, type PromptContent } from "../shared/acp-types";
+import {
+  normalizePermissionOptions,
+  parseElicitationFormSchema,
+  parseSafeElicitationUrl,
+  validateElicitationValues,
+  type DesktopInteractionRequest,
+  type DesktopInteractionResponse,
+} from "../shared/interactions";
+import {
+  editableCommandFromPermission,
+  permissionDecisionFromInteraction,
+  permissionToolCallId,
+  revisedCommandFromResult,
+} from "./permission-interactions";
+import { beginCommandRevision, completeCommandRevision, rollbackCommandRevision } from "./command-revision-state";
 
 /**
  * The ACP implementation is owned by the runtime layer. The shell only relies
@@ -76,7 +92,8 @@ type RuntimeHost = {
   stop?(): Promise<void>;
   request?<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T>;
   command?<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T>;
-  respondToUi?(id: string, response: Record<string, unknown>): Promise<void>;
+  respondToUi?(id: string, response: Record<string, unknown>): Promise<{ pending?: boolean } | void>;
+  renameSession?(id: string, title: string): Promise<SessionSummary | undefined>;
   authenticate?(): Promise<boolean>;
   logout?(): Promise<void>;
   listSessions?(cwd?: string): Promise<SessionSummary[]>;
@@ -113,7 +130,121 @@ const stableUserDataPath = userDataOverride
 const appSettingsFile = path.join(stableUserDataPath, "app-settings.json");
 const sessionIndexFile = path.join(stableUserDataPath, "session-index.json");
 const authPrompts = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
-const permissionRequests = new Map<string, { allowed: Set<string>; resolve(decision: unknown): void }>();
+const interactionBroker = new InteractionBroker();
+const urlInteractionIds = new ElicitationUrlRegistry();
+
+function openDesktopInteraction(request: DesktopInteractionRequest): Promise<DesktopInteractionResponse> {
+  const targetWindow = request.sessionId ? windowForSession(request.sessionId) : undefined;
+  const owner = targetWindow ?? BrowserWindow.getFocusedWindow() ?? mainWindow;
+  const handle = interactionBroker.open<DesktopInteractionRequest, DesktopInteractionResponse>(request, {
+    id: request.id,
+    kind: request.kind,
+    generation: request.generation,
+    ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+    ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+    ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+    ...(owner ? { ownerId: owner.webContents.id } : {}),
+    timeoutMs: 120_000,
+    cancelResult: { action: "cancel" },
+  });
+  if (request.kind === "elicitation-url") urlInteractionIds.register(request.elicitationId, request.id);
+  owner?.webContents.send("agent:event", { type: "interaction_request", request });
+  void handle.result.finally(() => {
+    if (request.kind === "elicitation-url") urlInteractionIds.unregister(request.elicitationId, request.id);
+    if (owner && !owner.isDestroyed()) owner.webContents.send("agent:event", { type: "interaction_closed", id: request.id });
+  });
+  return handle.result;
+}
+
+function extensionEnabled(host: { hasExtension?(key: string): boolean }, key: string): boolean {
+  try { return host.hasExtension?.(key) === true; } catch { return false; }
+}
+
+function sendInteractionRequest(ownerId: number | undefined, request: DesktopInteractionRequest): void {
+  const owner = ownerId === undefined ? undefined : windowForSender(ownerId);
+  owner?.webContents.send("agent:event", { type: "interaction_request", request });
+}
+
+async function respondToDesktopInteraction(
+  id: string,
+  request: DesktopInteractionRequest,
+  data: Record<string, unknown>,
+): Promise<{ pending?: boolean } | void> {
+  const pending = interactionBroker.get(id);
+  if (!pending || pending.generation !== request.generation) return;
+  const action = typeof data.action === "string" ? data.action : "cancel";
+
+  if (request.kind === "permission") {
+    if (action === "revise") {
+      const instruction = expectString(data.instruction, "revision instruction", 4_000).trim();
+      const revision = data.revision;
+      if (!instruction || !Number.isSafeInteger(revision) || revision !== (request.commandRevision?.revision ?? -1) + 1 || !request.sessionId || !request.commandRevision) {
+        throw new Error("Invalid command revision request");
+      }
+      const inFlight = interactionBroker.updateRequest<DesktopInteractionRequest>(id, (current) => current.kind === "permission"
+        ? beginCommandRevision(current, revision as number) ?? current
+        : current);
+      if (inFlight) sendInteractionRequest(pending.ownerId, inFlight);
+      try {
+        const result = await agentHost?.command?.("revise_command", {
+          sessionId: request.sessionId,
+          command: request.commandRevision.command,
+          instruction,
+        });
+        const command = revisedCommandFromResult(result);
+        if (!command) throw new Error("Devin returned an invalid revised command");
+        const current = interactionBroker.get(id)?.request as DesktopInteractionRequest | undefined;
+        if (!current || current.kind !== "permission" || current.commandRevision?.revision !== revision) return { pending: true };
+        const updated = interactionBroker.updateRequest<DesktopInteractionRequest>(id, (value) => value.kind === "permission"
+          ? completeCommandRevision(value, revision as number, command) ?? value
+          : value);
+        if (updated) sendInteractionRequest(pending.ownerId, updated);
+        return { pending: true };
+      } catch (error) {
+        const rolledBack = interactionBroker.updateRequest<DesktopInteractionRequest>(id, (current) => current.kind === "permission"
+          ? rollbackCommandRevision(current, revision as number)
+          : current);
+        if (rolledBack) sendInteractionRequest(pending.ownerId, rolledBack);
+        throw error;
+      }
+    }
+    if (action === "select") {
+      const optionId = expectString(data.optionId, "permission option", 200);
+      const updatedCommand = typeof data.updatedCommand === "string" && request.editableCommand
+        ? expectString(data.updatedCommand, "updated command", 100_000).trim()
+        : undefined;
+      const response: DesktopInteractionResponse = {
+        action: "select",
+        optionId,
+        ...(updatedCommand ? { updatedCommand } : {}),
+      };
+      interactionBroker.settle(id, response, request.generation);
+      return;
+    }
+    interactionBroker.settle(id, { action: "cancel" }, request.generation);
+    return;
+  }
+
+  if (request.kind === "elicitation-form") {
+    if (action === "accept") {
+      const raw = expectRecord(data.content, "elicitation content");
+      const validated = validateElicitationValues(request.form, raw);
+      if (!validated.ok) throw new Error("Elicitation values do not satisfy the requested schema");
+      interactionBroker.settle(id, { action: "accept", content: validated.content }, request.generation);
+      return;
+    }
+    interactionBroker.settle(id, { action: action === "decline" ? "decline" : "cancel" }, request.generation);
+    return;
+  }
+
+  if (action === "open") {
+    const safe = parseSafeElicitationUrl(request.url);
+    if (!safe || safe.url !== request.url) throw new Error("Unsafe elicitation URL");
+    await shell.openExternal(request.url);
+    return { pending: true };
+  }
+  interactionBroker.settle(id, { action: action === "decline" ? "decline" : "cancel" }, request.generation);
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "devin-preview",
@@ -179,30 +310,67 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           timestamp: event.receivedAt,
         });
       },
-      onStateChange: (state: string, error?: Error) => broadcastToRenderers("agent:event", { type: "agent_state", state, ...(error ? { error: safeError(error) } : {}) }),
+      onStateChange: (state: string, error?: Error) => {
+        if (state === "error" || state === "stopping" || state === "closed") interactionBroker.cancelAll();
+        broadcastToRenderers("agent:event", { type: "agent_state", state, ...(error ? { error: safeError(error) } : {}) });
+      },
       onDiagnostic: (diagnostic: unknown) => broadcastToRenderers("agent:event", { type: "agent_diagnostic", diagnostic }),
       openExternal: (url: string) => shell.openExternal(url),
-      onPermissionRequest: async (request: unknown) => {
+      onPermissionRequest: async (request: unknown, context: { generation: number; rpcRequestId: string | number | null }) => {
         const requestRecord = request && typeof request === "object" ? request as Record<string, unknown> : {};
-        const id = typeof requestRecord.id === "string" ? requestRecord.id : randomUUID();
-        const options = Array.isArray(requestRecord.options)
-          ? requestRecord.options.map((option) => {
-            const value = option && typeof option === "object" ? option as Record<string, unknown> : {};
-            return { id: String(value.optionId ?? value.id ?? ""), label: String(value.label ?? value.name ?? value.optionId ?? value.id ?? ""), description: typeof value.description === "string" ? value.description : undefined };
-          }).filter((option) => option.id)
-          : [];
+        const id = randomUUID();
+        const options = normalizePermissionOptions(Array.isArray(requestRecord.options) ? requestRecord.options : undefined);
         const requestSessionId = typeof requestRecord.sessionId === "string" ? requestRecord.sessionId : undefined;
-        const targetWindow = requestSessionId ? windowForSession(requestSessionId) : undefined;
-        (targetWindow ?? BrowserWindow.getFocusedWindow() ?? mainWindow)?.webContents.send("agent:event", { type: "permission_request", id, title: "Devin needs permission", message: "Choose an action for this request.", options, request: requestRecord });
-        return new Promise((resolve) => {
-          permissionRequests.set(id, { allowed: new Set(options.map((option) => option.id)), resolve });
-          setTimeout(() => {
-            const pending = permissionRequests.get(id);
-            if (!pending) return;
-            permissionRequests.delete(id);
-            pending.resolve(null);
-          }, 120_000);
+        const editableCommand = extensionEnabled(raw, "cognition.ai/editableCommands") ? editableCommandFromPermission(requestRecord) : undefined;
+        const commandRevision = extensionEnabled(raw, "cognition.ai/commandRevision") && editableCommand
+          ? { command: editableCommand.command, revision: 0 }
+          : undefined;
+        const response = await openDesktopInteraction({
+          kind: "permission",
+          id,
+          generation: context.generation,
+          ...(requestSessionId ? { sessionId: requestSessionId } : {}),
+          ...(permissionToolCallId(requestRecord) ? { toolCallId: permissionToolCallId(requestRecord) } : {}),
+          requestId: context.rpcRequestId,
+          title: "Devin needs permission",
+          message: "Review the request and choose an action.",
+          options,
+          ...(editableCommand ? { editableCommand } : {}),
+          ...(commandRevision ? { commandRevision } : {}),
+          raw: requestRecord,
         });
+        return permissionDecisionFromInteraction(response, options);
+      },
+      onElicitationRequest: async (request: unknown, context: { generation: number; rpcRequestId: string | number | null }) => {
+        const record = request && typeof request === "object" ? request as Record<string, unknown> : {};
+        const sessionId = typeof record.sessionId === "string" ? record.sessionId : undefined;
+        const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
+        const requestId = typeof record.requestId === "string" || typeof record.requestId === "number" || record.requestId === null ? record.requestId : undefined;
+        const common = {
+          id: randomUUID(),
+          generation: context.generation,
+          ...(sessionId ? { sessionId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          ...(requestId !== undefined ? { requestId } : {}),
+          message: typeof record.message === "string" ? record.message : "Devin requests additional information.",
+        };
+        if (record.mode === "form") {
+          const parsed = parseElicitationFormSchema(record.requestedSchema as JsonObject | undefined);
+          if (!parsed.ok) return { action: "cancel" };
+          const response = await openDesktopInteraction({ kind: "elicitation-form", ...common, form: parsed.form });
+          return response.action === "accept" ? { action: "accept", content: response.content ?? {} } : response.action === "decline" ? { action: "decline" } : { action: "cancel" };
+        }
+        if (record.mode === "url" && typeof record.elicitationId === "string" && typeof record.url === "string") {
+          const safe = parseSafeElicitationUrl(record.url);
+          if (!safe) return { action: "cancel" };
+          const response = await openDesktopInteraction({ kind: "elicitation-url", ...common, elicitationId: record.elicitationId, ...safe });
+          return response.action === "accept" ? { action: "accept" } : response.action === "decline" ? { action: "decline" } : { action: "cancel" };
+        }
+        return { action: "cancel" };
+      },
+      onElicitationComplete: (notification: { elicitationId: string }, context: { generation: number }) => {
+        const interactionId = urlInteractionIds.get(notification.elicitationId);
+        if (interactionId) interactionBroker.settle(interactionId, { action: "accept" }, context.generation);
       },
     }) as any;
     const raw = host as any;
@@ -262,8 +430,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
         return promise;
       },
       async stop() {
-        for (const pending of permissionRequests.values()) pending.resolve(null);
-        permissionRequests.clear();
+        interactionBroker.cancelAll();
         await raw.stop?.();
       },
       async command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T> {
@@ -312,7 +479,9 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           }
         }
         if (type === "cancel" || type === "abort") {
-          return await raw.cancel?.(resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
+          const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
+          if (sessionId) interactionBroker.cancelSession(sessionId);
+          return await raw.cancel?.(sessionId) as T;
         }
         if (type === "set_mode") return await raw.setMode?.(String(payload.modeId ?? payload.value), resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
         if (type === "set_config_option") return await raw.setConfigOption?.(String(payload.configId), payload.value as string | boolean, resolveRuntimeCommandSessionId(payload, raw.sessionId)) as T;
@@ -324,7 +493,23 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
           return [...(sessionId ? advertisedCommands.get(sessionId) ?? [] : [])] as T;
         }
-        if (type === "reconnect") return await raw.restart?.() as T;
+        if (type === "side_chat") {
+          const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
+          if (!sessionId || !advertisedCommands.get(sessionId)?.has("btw") || !extensionEnabled(raw, "cognition.ai/chains")) throw new Error("当前 Devin session 未广告 /btw");
+          return await raw.sideChat?.(String(payload.message ?? ""), sessionId) as T;
+        }
+        if (type === "revise_command") {
+          const sessionId = resolveRuntimeCommandSessionId(payload, raw.sessionId);
+          return await raw.reviseCommand?.({
+            command: String(payload.command ?? ""),
+            instruction: String(payload.instruction ?? ""),
+          }, sessionId) as T;
+        }
+        if (type === "reconnect") {
+          interactionBroker.cancelAll();
+          broadcastToRenderers("agent:event", { type: "connection_generation" });
+          return await raw.restart?.() as T;
+        }
         if (type === "handoff") {
           if (!advertisedCommands.get(raw.sessionId)?.has("handoff")) throw new Error("当前 Devin session 未广告 /handoff");
           return await raw.prompt?.("/handoff", raw.sessionId) as T;
@@ -346,6 +531,14 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           ? { sessionId: id, isLocked: latestSnapshot.locked === true }
           : undefined;
         await raw.deleteSession?.(id, summary);
+      },
+      async renameSession(id: string, title: string) {
+        const existing = (await listSessions()).find((session) => session.id === id);
+        if (!existing) return undefined;
+        if (!extensionEnabled(raw, "cognition.ai/sessionRename")) return renameSession(id, title, "local");
+        const result = await raw.renameSession?.(id, title);
+        const confirmedTitle = result && typeof result.title === "string" ? result.title : title;
+        return renameSession(id, confirmedTitle, "native");
       },
     };
   } catch {
@@ -412,6 +605,7 @@ function createWindow(options: { sessionId?: string; title?: string } = {}): Bro
   const webContentsId = browserWindow.webContents.id;
   if (options.sessionId) auxiliaryWindowIds.add(webContentsId);
   browserWindow.on("closed", () => {
+    interactionBroker.cancelOwner(webContentsId);
     auxiliaryWindowIds.delete(webContentsId);
     rendererSessionIds.delete(webContentsId);
     rendererCwds.delete(webContentsId);
@@ -646,7 +840,16 @@ function registerIpc(): void {
   });
   ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectString(id, "session id", 200), expectBoolean(pinned, "pinned")));
   ipcMain.handle("sessions:reorder", (_event, ids: unknown) => reorderSessions(expectStringList(ids, "session ids", 500, 200)));
-  ipcMain.handle("sessions:rename", (_event, id: unknown, title: unknown) => renameSession(expectString(id, "session id", 200), expectString(title, "session title", 120)));
+  ipcMain.handle("sessions:rename", async (_event, id: unknown, title: unknown) => {
+    const sessionId = expectString(id, "session id", 200);
+    const sessionTitle = expectString(title, "session title", 120).trim();
+    if (!sessionTitle) throw new Error("Session title must be between 1 and 120 characters");
+    const renamed = agentHost?.renameSession
+      ? await agentHost.renameSession(sessionId, sessionTitle)
+      : await renameSession(sessionId, sessionTitle, "local");
+    if (renamed) broadcastToRenderers("agent:event", { type: "session_renamed", session: renamed });
+    return renamed;
+  });
   ipcMain.handle("sessions:archive", (_event, id: unknown) => archiveSession(expectString(id, "session id", 200)));
   ipcMain.handle("sessions:unarchive", (_event, id: unknown) => unarchiveSession(expectString(id, "session id", 200)));
   ipcMain.handle("sessions:open-in-new-window", async (_event, id: unknown) => {
@@ -751,20 +954,16 @@ function registerIpc(): void {
   ipcMain.handle("agent:ui-response", (_event, id: unknown, response: unknown) => {
     const requestId = expectString(id, "request id", 200);
     const data = expectRecord(response, "UI response");
-    const pending = permissionRequests.get(requestId);
+    const pending = interactionBroker.get(requestId);
     if (pending) {
-      permissionRequests.delete(requestId);
-      const decision = permissionDecisionFromUi(data);
-      const optionId = decision.outcome.outcome === "selected" ? decision.outcome.optionId : undefined;
-      pending.resolve(optionId && pending.allowed.has(optionId) ? decision : { outcome: { outcome: "cancelled" } });
-      return;
+      return respondToDesktopInteraction(requestId, pending.request as DesktopInteractionRequest, data);
     }
     if (!agentHost?.respondToUi) throw new Error("Devin ACP runtime is not available");
     return agentHost.respondToUi(requestId, data);
   });
 }
 
-const ALLOWED_AGENT_COMMANDS = new Set(["prompt", "cancel", "abort", "follow_up", "new_session", "get_state", "set_model", "set_mode", "set_config_option", "get_available_models", "get_available_thinking_levels", "compact", "get_session_stats", "get_commands", "handoff", "reconnect"]);
+const ALLOWED_AGENT_COMMANDS = new Set(["prompt", "cancel", "abort", "follow_up", "side_chat", "new_session", "get_state", "set_model", "set_mode", "set_config_option", "get_available_models", "get_available_thinking_levels", "compact", "get_session_stats", "get_commands", "handoff", "reconnect"]);
 
 app.whenReady().then(async () => {
   if (!app.isPackaged && process.platform === "darwin") app.dock?.setIcon(developmentIconPath);
@@ -782,8 +981,7 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("before-quit", () => {
-  for (const pending of permissionRequests.values()) pending.resolve(null);
-  permissionRequests.clear();
+  interactionBroker.cancelAll();
   void agentHost?.stop?.();
 });
 

@@ -129,7 +129,7 @@ export interface UsageState {
 }
 
 /** Standardized event consumed by the renderer reducer. */
-export type AgentEvent =
+export type AgentEvent = (
   | {
       type: "message_chunk";
       sessionId: string;
@@ -189,7 +189,8 @@ export type AgentEvent =
   | { type: "session_info"; sessionId: string; title?: string; updatedAt?: number; cwd?: string; locked?: boolean; timestamp?: number }
   | { type: "usage"; sessionId: string; usage: UsageState; timestamp?: number }
   | { type: "error"; sessionId: string; message: string; recoverable?: boolean; timestamp?: number }
-  | { type: "unknown"; sessionId: string; updateId?: string; timestamp: number; kind: string; raw: unknown; diagnostic: string };
+  | { type: "unknown"; sessionId: string; updateId?: string; timestamp: number; kind: string; raw: unknown; diagnostic: string }
+) & { chainId?: string };
 
 export interface ConversationState {
   sessionId: string;
@@ -220,4 +221,7 @@ export interface SessionUpdateEnvelope {
   update: unknown;
   /** Unknown Devin extension metadata is intentionally not discarded. */
   meta?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
+  /** Main-process wrapper retains the original ACP notification envelope. */
+  params?: unknown;
 }

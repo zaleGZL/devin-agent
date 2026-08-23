@@ -1,0 +1,44 @@
+{
+  "source": {
+    "cli": "devin 3000.5.20 (2d902011)",
+    "capturedAt": "2026-08-23",
+    "sanitized": true
+  },
+  "withoutClientDeclaration": {
+    "clientCapabilities": {},
+    "availableCommands": ["rename"]
+  },
+  "withClientDeclaration": {
+    "clientCapabilities": {
+      "_meta": {
+        "cognition.ai/chains": true
+      }
+    },
+    "availableCommands": ["btw", "rename"]
+  },
+  "sidePrompt": {
+    "sessionId": "session-fixture",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "[SAFE_SIDE_QUESTION]"
+      }
+    ],
+    "_meta": {
+      "cognition.ai/chain": "side"
+    }
+  },
+  "sideUpdate": {
+    "sessionId": "session-fixture",
+    "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+        "type": "text",
+        "text": "[SAFE_SIDE_ANSWER]"
+      }
+    },
+    "_meta": {
+      "cognition.ai/chain": "side"
+    }
+  }
+}

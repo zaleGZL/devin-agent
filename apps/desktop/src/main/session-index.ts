@@ -42,13 +42,17 @@ export function mergeSessionSummary(existing: SessionSummary, incoming: SessionS
   const incomingHasLocalConversationState = incoming.messageCount !== undefined;
   const existingHasLocalConversationState = (existing.messageCount ?? 0) > 0;
   const updatedAt = laterIsoDate(existing.updatedAt, incoming.updatedAt);
+  const preserveRecordedTitle = existing.titleSource === "local"
+    || (existing.titleSource === "native"
+      && isoTimestamp(existing.titleUpdatedAt ?? existing.updatedAt) > isoTimestamp(incoming.titleUpdatedAt ?? incoming.updatedAt));
   return {
     ...existing,
     ...incoming,
     cwd: incoming.cwd.trim() || existing.cwd,
-    title: existing.customTitle ?? (existingHasLocalConversationState && !incomingHasLocalConversationState
+    title: preserveRecordedTitle ? existing.title : existing.customTitle ?? (existingHasLocalConversationState && !incomingHasLocalConversationState
       ? existing.title
       : incoming.title.trim() || existing.title),
+    ...(preserveRecordedTitle ? { titleSource: existing.titleSource, titleUpdatedAt: existing.titleUpdatedAt } : {}),
     createdAt: earlierIsoDate(existing.createdAt, incoming.createdAt),
     updatedAt,
     ...(existing.messageCount !== undefined && incoming.messageCount === undefined
@@ -145,13 +149,22 @@ export async function reorderSessions(ids: string[]): Promise<boolean> {
   return true;
 }
 
-export async function renameSession(id: string, title: string): Promise<SessionSummary | undefined> {
+export async function renameSession(id: string, title: string, source: "local" | "native" = "local"): Promise<SessionSummary | undefined> {
   const normalizedTitle = title.trim();
   if (!normalizedTitle || normalizedTitle.length > 120) throw new Error("Session title must be between 1 and 120 characters");
   const items = await readIndex();
   const index = items.findIndex((item) => item.id === id);
   if (index < 0) return undefined;
-  const updated = { ...items[index], title: normalizedTitle, customTitle: normalizedTitle };
+  const now = new Date().toISOString();
+  const updated: SessionSummary = {
+    ...items[index],
+    title: normalizedTitle,
+    titleSource: source,
+    titleUpdatedAt: now,
+    updatedAt: laterIsoDate(items[index].updatedAt, now),
+    ...(source === "local" ? { customTitle: normalizedTitle } : {}),
+  };
+  if (source === "native") delete updated.customTitle;
   items[index] = updated;
   await writeIndex(items);
   return updated;

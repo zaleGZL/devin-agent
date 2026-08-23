@@ -30,4 +30,27 @@ describe("Devin capability helpers", () => {
     expect(getFeatureGate(capabilities, "handoff-cloud")).toMatchObject({ enabled: true, cloud: true });
     expect(getFeatureGate(capabilities, "checkpoint")).toMatchObject({ enabled: false, source: "unsupported" });
   });
+
+  it("gates vendor features on exact per-connection metadata and dynamic commands", () => {
+    const advertised = normalizeDevinCapabilities({
+      agentCapabilities: {
+        _meta: {
+          "cognition.ai/editableCommands": true,
+          "cognition.ai/commandRevision": true,
+          "cognition.ai/chains": true,
+          "cognition.ai/sessionRename": true,
+        },
+      },
+      availableCommands: [{ name: "btw" }],
+    });
+    expect(getFeatureGate(advertised, "editable-commands")).toMatchObject({ enabled: true });
+    expect(getFeatureGate(advertised, "command-revision")).toMatchObject({ enabled: true });
+    expect(getFeatureGate(advertised, "chain-sidechat")).toMatchObject({ enabled: true });
+    expect(getFeatureGate(advertised, "session-rename")).toMatchObject({ enabled: true });
+
+    const refreshed = normalizeDevinCapabilities({ agentCapabilities: { _meta: {} }, availableCommands: [{ name: "btw" }] });
+    expect(getFeatureGate(refreshed, "editable-commands")).toMatchObject({ enabled: false });
+    expect(getFeatureGate(refreshed, "chain-sidechat")).toMatchObject({ enabled: false });
+    expect(getFeatureGate(refreshed, "session-rename")).toMatchObject({ enabled: false });
+  });
 });

@@ -77,9 +77,13 @@ export type FeatureId =
   | "steer"
   | "tool-diff"
   | "cost-precision"
-  | "audio-input";
+  | "audio-input"
+  | "editable-commands"
+  | "command-revision"
+  | "chain-sidechat"
+  | "session-rename";
 
-const UNSUPPORTED_REASONS: Record<Exclude<FeatureId, "handoff-cloud" | "subagents" | "audio-input">, string> = {
+const UNSUPPORTED_REASONS: Record<Exclude<FeatureId, "handoff-cloud" | "subagents" | "audio-input" | "editable-commands" | "command-revision" | "chain-sidechat" | "session-rename">, string> = {
   checkpoint: "ACP 未提供原子 checkpoint/undo 能力",
   steer: "ACP v1 没有运行中 steer 方法",
   "tool-diff": "ACP 未保证完整工具 diff 数据",
@@ -164,7 +168,30 @@ export function getFeatureGate(capabilities: DevinCapabilities, id: FeatureId): 
   if (id === "audio-input") {
     return { id, enabled: capabilities.prompt.audio === true, reason: capabilities.prompt.audio ? undefined : "当前 ACP prompt capability 未广告 audio", source: capabilities.prompt.audio ? "runtime" : "unsupported" };
   }
+  if (id === "editable-commands") return extensionGate(capabilities, id, "cognition.ai/editableCommands");
+  if (id === "command-revision") return extensionGate(capabilities, id, "cognition.ai/commandRevision");
+  if (id === "session-rename") return extensionGate(capabilities, id, "cognition.ai/sessionRename");
+  if (id === "chain-sidechat") {
+    const extension = extensionAdvertised(capabilities, "cognition.ai/chains");
+    const command = commandIsAvailable(capabilities.commands, "btw");
+    return {
+      id,
+      enabled: extension && command,
+      reason: !extension ? "当前 Devin ACP 未广告 chains" : !command ? "当前 session 未广告 /btw" : undefined,
+      source: extension && command ? "runtime" : "unsupported",
+    };
+  }
   return { id, enabled: false, reason: UNSUPPORTED_REASONS[id], source: "unsupported" };
+}
+
+export function extensionAdvertised(capabilities: Pick<DevinCapabilities, "extensions">, key: string): boolean {
+  const value = capabilities.extensions[key];
+  return value !== undefined && value !== null && value !== false;
+}
+
+function extensionGate(capabilities: DevinCapabilities, id: FeatureId, key: string): FeatureGate {
+  const enabled = extensionAdvertised(capabilities, key);
+  return { id, enabled, reason: enabled ? undefined : `当前 Devin ACP 未广告 ${key}`, source: enabled ? "runtime" : "unsupported" };
 }
 
 export function findCommand(commands: AvailableCommand[], name: string): AvailableCommand | undefined {

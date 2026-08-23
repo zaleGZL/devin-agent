@@ -9,7 +9,13 @@ const initializeResult = {
     loadSession: true,
     promptCapabilities: { image: true, audio: false, embeddedContext: true },
     sessionCapabilities: { list: {}, delete: {}, additionalDirectories: {} },
-    _meta: { "cognition.ai/terminalLifecycle": true },
+    _meta: {
+      "cognition.ai/terminalLifecycle": true,
+      "cognition.ai/editableCommands": true,
+      "cognition.ai/commandRevision": true,
+      "cognition.ai/chains": true,
+      "cognition.ai/sessionRename": true,
+    },
   },
   authMethods: [{ id: "devin-browser", name: "Browser" }],
   _meta: { unknownFixtureExtension: { enabled: true } },
@@ -51,6 +57,8 @@ class FakeTransport {
       if (this.deferPrompts) return new Promise<JsonObject>((resolve) => this.promptResolvers.push(resolve)) as Promise<T>;
       return { stopReason: "end_turn" } as T;
     }
+    if (method === "_cognition.ai/command/revise") return { command: "touch revised.txt" } as T;
+    if (method === "_cognition.ai/session/rename") return { title: (params as Record<string, unknown>).title } as T;
     return {} as T;
   }
 
@@ -89,6 +97,16 @@ describe("DevinAcpHost contract", () => {
     expect(first).toBe(second);
     expect(transports).toHaveLength(1);
     expect(transports[0]?.requests.filter((request) => request.method === "initialize")).toHaveLength(1);
+    expect(transports[0]?.requests.find((request) => request.method === "initialize")?.params).toMatchObject({
+      clientCapabilities: {
+        elicitation: { form: {}, url: {} },
+        _meta: {
+          "cognition.ai/editableCommands": true,
+          "cognition.ai/commandRevision": true,
+          "cognition.ai/chains": true,
+        },
+      },
+    });
     await host.stop();
   });
 
@@ -122,6 +140,22 @@ describe("DevinAcpHost contract", () => {
     const result = await transports[0]?.requestPermission({ sessionId: "new-session", options: [{ optionId: "allow-once" }] });
     expect(permission).toHaveBeenCalledOnce();
     expect(result).toEqual({ outcome: { outcome: "selected", optionId: "allow-once" } });
+    await host.stop();
+  });
+
+  it("uses verified allowlisted Devin methods for side chat, revision and native rename", async () => {
+    const { host, transports } = createHost();
+    await host.start();
+    await host.newSession("/workspace");
+    await expect(host.sideChat("quick question")).resolves.toEqual({ stopReason: "end_turn" });
+    await expect(host.reviseCommand({ command: "touch original.txt", instruction: "change the filename" })).resolves.toEqual({ command: "touch revised.txt" });
+    await expect(host.renameSession("new-session", "Native title")).resolves.toEqual({ title: "Native title" });
+    expect(transports[0]?.requests.find((request) => request.method === "session/prompt")?.params).toMatchObject({
+      prompt: [{ type: "text", text: "quick question" }],
+      _meta: { "cognition.ai/chain": "side" },
+    });
+    expect(transports[0]?.requests.find((request) => request.method === "_cognition.ai/command/revise")?.params).toMatchObject({ command: "touch original.txt", note: "change the filename" });
+    expect(transports[0]?.requests.find((request) => request.method === "_cognition.ai/session/rename")?.params).toMatchObject({ sessionId: "new-session", title: "Native title" });
     await host.stop();
   });
 

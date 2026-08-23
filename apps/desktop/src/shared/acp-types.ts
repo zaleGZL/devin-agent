@@ -65,6 +65,11 @@ export interface ClientCapabilities extends JsonObject {
     [key: string]: JsonValue | undefined;
   };
   terminal?: JsonValue;
+  elicitation?: {
+    form?: JsonObject;
+    url?: JsonObject;
+    [key: string]: JsonValue | undefined;
+  };
   [key: string]: JsonValue | undefined;
 }
 
@@ -72,6 +77,49 @@ export interface InitializeParams extends JsonObject {
   protocolVersion: number;
   clientCapabilities: ClientCapabilities;
   clientInfo: ClientInfo;
+  _meta?: JsonObject;
+}
+
+export interface DevinClientFeatureSupport {
+  elicitationForm: boolean;
+  elicitationUrl: boolean;
+  editableCommands: boolean;
+  commandRevision: boolean;
+  chains: boolean;
+}
+
+export interface DevinClientAdvertisement {
+  clientCapabilities: ClientCapabilities;
+}
+
+export const DEVIN_DESKTOP_CLIENT_FEATURES: DevinClientFeatureSupport = {
+  elicitationForm: true,
+  elicitationUrl: true,
+  editableCommands: true,
+  commandRevision: true,
+  chains: true,
+};
+
+/** Build initialize fields only from client handlers compiled into Desktop. */
+export function buildDevinClientAdvertisement(
+  support: Partial<DevinClientFeatureSupport> = DEVIN_DESKTOP_CLIENT_FEATURES,
+): DevinClientAdvertisement {
+  const resolved = { ...DEVIN_DESKTOP_CLIENT_FEATURES, ...support };
+  const elicitation = {
+    ...(resolved.elicitationForm ? { form: {} } : {}),
+    ...(resolved.elicitationUrl ? { url: {} } : {}),
+  };
+  const clientMeta = {
+    ...(resolved.editableCommands ? { "cognition.ai/editableCommands": true } : {}),
+    ...(resolved.commandRevision ? { "cognition.ai/commandRevision": true } : {}),
+    ...(resolved.chains ? { "cognition.ai/chains": true } : {}),
+  };
+  return {
+    clientCapabilities: {
+      ...(Object.keys(elicitation).length > 0 ? { elicitation } : {}),
+      ...(Object.keys(clientMeta).length > 0 ? { _meta: clientMeta } : {}),
+    },
+  };
 }
 
 export interface AuthMethod extends JsonObject {
@@ -224,6 +272,36 @@ export interface PermissionDecision extends JsonObject {
   [key: string]: JsonValue;
 }
 
+export type ElicitationContentValue = string | number | boolean | string[];
+
+export interface ElicitationSchema extends JsonObject {
+  type?: "object";
+  title?: string | null;
+  description?: string | null;
+  properties?: Record<string, JsonObject>;
+  required?: string[] | null;
+}
+
+export type ElicitationRequest = JsonObject & {
+  mode: string;
+  message: string;
+  sessionId?: string;
+  toolCallId?: string | null;
+  requestId?: RpcId | null;
+  requestedSchema?: ElicitationSchema;
+  elicitationId?: string;
+  url?: string;
+};
+
+export type ElicitationResponse =
+  | { action: "accept"; content?: Record<string, ElicitationContentValue> | null; _meta?: JsonObject }
+  | { action: "decline"; _meta?: JsonObject }
+  | { action: "cancel"; _meta?: JsonObject };
+
+export interface ElicitationCompleteNotification extends JsonObject {
+  elicitationId: string;
+}
+
 export interface SessionUpdateEnvelope extends JsonObject {
   sessionId?: string;
   update?: JsonObject;
@@ -240,6 +318,7 @@ export interface AvailableCommand extends JsonObject {
 
 export type AcpServerRequest =
   | { method: "session/request_permission"; params: PermissionRequest }
+  | { method: "elicitation/create"; params: ElicitationRequest }
   | { method: string; params: JsonValue };
 
 export function asJsonObject(value: unknown): JsonObject | null {

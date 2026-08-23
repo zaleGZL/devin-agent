@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import {
   asJsonObject,
   asString,
+  buildDevinClientAdvertisement,
   capabilityAdvertised,
   getSessionLocked,
   normalizeAuthMethodId,
@@ -9,7 +10,11 @@ import {
   type AgentCapabilities,
   type AuthMethod,
   type ClientCapabilities,
+  type DevinClientFeatureSupport,
   type DevinCapabilities,
+  type ElicitationCompleteNotification,
+  type ElicitationRequest,
+  type ElicitationResponse,
   type InitializeResult,
   type JsonObject,
   type PermissionDecision,
@@ -73,6 +78,8 @@ export interface DevinAcpHostOptions {
   clientName?: string;
   clientVersion?: string;
   clientCapabilities?: ClientCapabilities;
+  clientMeta?: JsonObject;
+  clientFeatures?: Partial<DevinClientFeatureSupport>;
   requestTimeoutMs?: number;
   initializeTimeoutMs?: number;
   spawn?: SpawnFunction;
@@ -81,7 +88,13 @@ export interface DevinAcpHostOptions {
   onNotification?: (method: string, params: unknown) => void;
   onPermissionRequest?: (
     request: PermissionRequest,
+    context: { generation: number; rpcRequestId: string | number | null },
   ) => Promise<PermissionDecision | string | null | undefined> | PermissionDecision | string | null | undefined;
+  onElicitationRequest?: (
+    request: ElicitationRequest,
+    context: { generation: number; rpcRequestId: string | number | null },
+  ) => Promise<ElicitationResponse | null | undefined> | ElicitationResponse | null | undefined;
+  onElicitationComplete?: (notification: ElicitationCompleteNotification, context: { generation: number }) => void;
   openExternal?: (url: string) => Promise<void> | void;
   onStateChange?: (state: DevinHostState, error?: Error) => void;
   onExit?: (exit: AcpExitResult) => void;
@@ -139,6 +152,7 @@ export class DevinAcpHost {
   private activeSessionId: string | null = null;
   private activeSession: DevinSessionState | null = null;
   private readonly sessions = new Map<string, DevinSessionState>();
+  private readonly knownSessionIds = new Set<string>();
   private pendingSessionId: string | null = null;
   private pendingNewSession = false;
   private readonly promptRunningSessionIds = new Set<string>();
@@ -209,15 +223,17 @@ export class DevinAcpHost {
       const transport = this.createTransport(this.binaryInfo.path, generation);
       this.transport = transport;
       await transport.start();
+      const advertisement = buildDevinClientAdvertisement(this.options.clientFeatures);
       const result = await transport.request<InitializeResult>(
         "initialize",
         {
           protocolVersion: 1,
-          clientCapabilities: this.options.clientCapabilities ?? {},
+          clientCapabilities: this.options.clientCapabilities ?? advertisement.clientCapabilities,
           clientInfo: {
             name: this.options.clientName ?? DEFAULT_CLIENT_NAME,
             version: this.options.clientVersion ?? DEFAULT_CLIENT_VERSION,
           },
+          ...(this.options.clientMeta ? { _meta: this.options.clientMeta } : {}),
         },
         { timeoutMs: this.options.initializeTimeoutMs ?? this.options.requestTimeoutMs },
       );
@@ -343,6 +359,7 @@ export class DevinAcpHost {
     const sessions = Array.isArray(result.sessions)
       ? result.sessions.filter((session): session is SessionSummary => isSessionSummary(session))
       : [];
+    sessions.forEach((session) => this.knownSessionIds.add(session.sessionId));
     return { ...result, sessions };
   }
 
@@ -358,6 +375,7 @@ export class DevinAcpHost {
     }
     await this.request("session/delete", { sessionId });
     this.sessions.delete(sessionId);
+    this.knownSessionIds.delete(sessionId);
     this.promptRunningSessionIds.delete(sessionId);
     if (sessionId === this.activeSessionId) {
       this.activeSessionId = null;
@@ -498,6 +516,66 @@ export class DevinAcpHost {
     return result;
   }
 
+  hasExtension(key: string): boolean {
+    const value = this.requireCapabilities().extensions[key];
+    return value !== undefined && value !== null && value !== false;
+  }
+
+  async reviseCommand(
+    input: { command: string; instruction: string },
+    sessionId = this.activeSessionId,
+  ): Promise<JsonObject> {
+    await this.startIfNeeded();
+    if (!this.hasExtension("cognition.ai/commandRevision")) {
+      throw new DevinAcpError("capability", "当前 Devin ACP 未广告 commandRevision");
+    }
+    if (!sessionId || !this.sessions.has(sessionId)) throw new DevinAcpError("invalid-session", "只能修订已加载 session 的命令");
+    const command = input.command.trim();
+    const instruction = input.instruction.trim();
+    if (!command || !instruction) {
+      throw new DevinAcpError("protocol", "命令修订参数无效");
+    }
+    return this.request<JsonObject>("_cognition.ai/command/revise", {
+      sessionId,
+      command,
+      note: instruction,
+    });
+  }
+
+  async sideChat(question: string, sessionId = this.activeSessionId): Promise<JsonObject> {
+    await this.startIfNeeded();
+    if (!this.hasExtension("cognition.ai/chains")) throw new DevinAcpError("capability", "当前 Devin ACP 未广告 chains");
+    if (!sessionId || !this.sessions.has(sessionId)) throw new DevinAcpError("invalid-session", "只能在已加载 session 中使用 /btw");
+    const normalized = question.trim().replace(/^\/btw\s*/i, "");
+    if (!normalized) throw new DevinAcpError("invalid-session", "/btw 问题不能为空");
+    return this.request<JsonObject>(
+      "session/prompt",
+      {
+        sessionId,
+        prompt: [{ type: "text", text: normalized }],
+        _meta: { "cognition.ai/chain": "side" },
+      },
+      { timeoutMs: 0 },
+    );
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<JsonObject> {
+    await this.startIfNeeded();
+    if (!this.hasExtension("cognition.ai/sessionRename")) throw new DevinAcpError("capability", "当前 Devin ACP 未广告 sessionRename");
+    if (!sessionId || (!this.sessions.has(sessionId) && !this.knownSessionIds.has(sessionId))) {
+      throw new DevinAcpError("invalid-session", "只能重命名当前连接已知的 session");
+    }
+    const normalized = title.trim();
+    if (!normalized || normalized.length > 120) throw new DevinAcpError("invalid-session", "session title 必须为 1–120 个字符");
+    const result = await this.request<JsonObject>("_cognition.ai/session/rename", { sessionId, title: normalized });
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.title = asString(result.title) ?? normalized;
+      session.updatedAt = new Date().toISOString();
+    }
+    return result;
+  }
+
   async stop(): Promise<void> {
     if (this.state === "closed" || this.state === "idle") {
       this.state = "closed";
@@ -513,6 +591,7 @@ export class DevinAcpHost {
     this.activeSession = null;
     this.pendingSessionId = null;
     this.sessions.clear();
+    this.knownSessionIds.clear();
     this.promptRunningSessionIds.clear();
     this.state = "closed";
     this.emitState();
@@ -528,6 +607,7 @@ export class DevinAcpHost {
     this.activeSession = null;
     this.pendingSessionId = null;
     this.sessions.clear();
+    this.knownSessionIds.clear();
     this.promptRunningSessionIds.clear();
     this.state = "idle";
     this.stopping = false;
@@ -563,7 +643,7 @@ export class DevinAcpHost {
       timeoutMs: this.options.requestTimeoutMs,
       spawn: this.options.spawn,
       onNotification: (method, params) => this.handleNotification(method, params, generation),
-      onRequest: (method, params) => this.handleServerRequest(method, params, generation),
+      onRequest: (method, params, context) => this.handleServerRequest(method, params, generation, context?.requestId ?? null),
       onMalformedMessage: (message) => this.emitDiagnostic({ code: "malformed-acp", message, generation }),
       onExit: (exit) => {
         this.options.onExit?.(exit);
@@ -631,25 +711,48 @@ export class DevinAcpHost {
       });
       return;
     }
+    if (method === "elicitation/complete") {
+      const notification = asJsonObject(params);
+      const elicitationId = asString(notification?.elicitationId);
+      if (!elicitationId) {
+        this.emitDiagnostic({ code: "protocol", message: "elicitation/complete 缺少 elicitationId", details: params, generation });
+        return;
+      }
+      this.options.onElicitationComplete?.({ ...notification, elicitationId }, { generation });
+      return;
+    }
     this.options.onNotification?.(method, redactSensitive(params));
   }
 
-  private async handleServerRequest(method: string, params: unknown, generation: number): Promise<unknown> {
-    if (method !== "session/request_permission") {
-      throw new DevinAcpError("capability", `Desktop 未实现 ACP request：${method}`);
+  private async handleServerRequest(method: string, params: unknown, generation: number, rpcRequestId: string | number | null): Promise<unknown> {
+    if (method === "session/request_permission") {
+      const request = (asJsonObject(params) ?? {}) as PermissionRequest;
+      const sessionId = asString(request.sessionId);
+      if (sessionId && this.pendingNewSession && !this.pendingSessionId) this.pendingSessionId = sessionId;
+      if (generation !== this.generation || (sessionId && !this.sessions.has(sessionId) && sessionId !== this.pendingSessionId)) {
+        return { outcome: { outcome: "cancelled" } };
+      }
+      if (!this.options.onPermissionRequest) return { outcome: { outcome: "cancelled" } };
+      const result = await this.options.onPermissionRequest(request, { generation, rpcRequestId });
+      return permissionDecision(result);
     }
-    const request = (asJsonObject(params) ?? {}) as PermissionRequest;
-    const sessionId = asString(request.sessionId);
-    if (sessionId && this.pendingNewSession && !this.pendingSessionId) this.pendingSessionId = sessionId;
-    if (generation !== this.generation || (sessionId && !this.sessions.has(sessionId) && sessionId !== this.pendingSessionId)) {
-      return { outcome: { outcome: "cancelled" } };
+    if (method === "elicitation/create") {
+      const request = asJsonObject(params) as ElicitationRequest | null;
+      if (!request || typeof request.mode !== "string" || typeof request.message !== "string") return { action: "cancel" };
+      const sessionId = asString(request.sessionId);
+      const hasRequestScope = request.requestId !== undefined;
+      if (generation !== this.generation || (!sessionId && !hasRequestScope) || (sessionId && !this.sessions.has(sessionId) && sessionId !== this.pendingSessionId)) {
+        return { action: "cancel" };
+      }
+      if (!this.options.onElicitationRequest) return { action: "cancel" };
+      const result = await this.options.onElicitationRequest(request, { generation, rpcRequestId });
+      return elicitationDecision(result);
     }
-    if (!this.options.onPermissionRequest) return { outcome: { outcome: "cancelled" } };
-    const result = await this.options.onPermissionRequest(request);
-    return permissionDecision(result);
+    throw new DevinAcpError("capability", `Desktop 未实现 ACP request：${method}`);
   }
 
   private setActiveSession(session: DevinSessionState): void {
+    this.knownSessionIds.add(session.sessionId);
     this.sessions.set(session.sessionId, session);
     this.activeSessionId = session.sessionId;
     this.activeSession = session;
@@ -734,6 +837,19 @@ function permissionDecision(
     return result as DevinPermissionResult;
   }
   return { outcome: { outcome: "cancelled" } };
+}
+
+function elicitationDecision(result: ElicitationResponse | null | undefined): ElicitationResponse {
+  if (!result || !asJsonObject(result)) return { action: "cancel" };
+  if (result.action === "accept") {
+    return {
+      action: "accept",
+      ...(asJsonObject(result.content) ? { content: result.content } : {}),
+      ...(asJsonObject(result._meta) ? { _meta: result._meta } : {}),
+    };
+  }
+  if (result.action === "decline") return { action: "decline", ...(asJsonObject(result._meta) ? { _meta: result._meta } : {}) };
+  return { action: "cancel", ...(asJsonObject(result._meta) ? { _meta: result._meta } : {}) };
 }
 
 function findAuthUrl(result: JsonObject): string | undefined {

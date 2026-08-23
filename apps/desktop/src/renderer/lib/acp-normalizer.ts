@@ -36,6 +36,11 @@ export function normalizeAcpUpdate(
   const timestamp = normalizeTimestamp(envelope.timestamp) ?? Date.now();
   const update = isRecord(envelope.update) ? envelope.update : {};
   const kind = updateKind(update);
+  const chain = extractChain(input, update);
+  if (chain === "invalid") {
+    return unknownEvent(sessionId, updateId, timestamp, kind || "unknown", input, "无法识别的 cognition.ai/chain 元数据");
+  }
+  const chainField = chain === "side" ? { chainId: "side" } : {};
 
   switch (kind) {
     case "user_message_chunk":
@@ -48,6 +53,7 @@ export function normalizeAcpUpdate(
       if (!text && images.length === 0 && mentions.length === 0) return unknownEvent(sessionId, updateId, timestamp, kind, update, "消息 chunk 不包含可显示内容");
       return {
         type: "message_chunk",
+        ...chainField,
         sessionId,
         role,
         text,
@@ -63,6 +69,7 @@ export function normalizeAcpUpdate(
       if (!text) return unknownEvent(sessionId, updateId, timestamp, kind, update, "thought chunk 不包含文本");
       return {
         type: "thought_chunk",
+        ...chainField,
         sessionId,
         text,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
@@ -78,6 +85,7 @@ export function normalizeAcpUpdate(
       if (status === "complete" || status === "error" || status === "cancelled") {
         return {
           type: "tool_end",
+          ...chainField,
           sessionId,
           toolId,
           name,
@@ -90,6 +98,7 @@ export function normalizeAcpUpdate(
       }
       return {
         type: "tool_start",
+        ...chainField,
         sessionId,
         toolId,
         name,
@@ -105,6 +114,7 @@ export function normalizeAcpUpdate(
       const output = stringifyContent(update.rawOutput ?? update.output ?? update.content);
       return {
         type: status === "complete" || status === "error" || status === "cancelled" ? "tool_end" : "tool_update",
+        ...chainField,
         sessionId,
         toolId,
         ...(stringValue(update.name) ? { name: stringValue(update.name) } : {}),
@@ -119,16 +129,16 @@ export function normalizeAcpUpdate(
     case "plan": {
       const plan = normalizePlan(update);
       if (!plan) return unknownEvent(sessionId, updateId, timestamp, kind, update, "plan 不包含有效 steps/entries");
-      return { type: "plan", sessionId, plan: { ...plan, updatedAt: timestamp }, timestamp };
+      return { type: "plan", ...chainField, sessionId, plan: { ...plan, updatedAt: timestamp }, timestamp };
     }
     case "available_commands_update": {
       const commands = normalizeCommands(update.availableCommands ?? update.commands);
-      return { type: "commands", sessionId, commands, timestamp };
+      return { type: "commands", ...chainField, sessionId, commands, timestamp };
     }
     case "current_mode_update": {
       const modeId = stringValue(update.currentModeId ?? update.modeId ?? update.currentMode);
       if (!modeId) return unknownEvent(sessionId, updateId, timestamp, kind, update, "current_mode_update 缺少 mode id");
-      return { type: "mode", sessionId, modeId, timestamp };
+      return { type: "mode", ...chainField, sessionId, modeId, timestamp };
     }
     case "config_option_update": {
       // ACP v1 sends the complete collection under `configOptions`. Keep the
@@ -142,15 +152,16 @@ export function normalizeAcpUpdate(
           const option = normalizeConfigOption(value);
           return option ? [option] : [];
         });
-        return { type: "config_options", sessionId, options, timestamp };
+        return { type: "config_options", ...chainField, sessionId, options, timestamp };
       }
       const option = normalizeConfigOption(update);
       if (!option) return unknownEvent(sessionId, updateId, timestamp, kind, update, "config_option_update 缺少 config id");
-      return { type: "config", sessionId, option, timestamp };
+      return { type: "config", ...chainField, sessionId, option, timestamp };
     }
     case "session_info_update": {
       return {
         type: "session_info",
+        ...chainField,
         sessionId,
         ...(stringValue(update.title) ? { title: stringValue(update.title) } : {}),
         ...(normalizeTimestamp(update.updatedAt) !== undefined ? { updatedAt: normalizeTimestamp(update.updatedAt) } : {}),
@@ -160,10 +171,10 @@ export function normalizeAcpUpdate(
       };
     }
     case "usage_update": {
-      return { type: "usage", sessionId, usage: normalizeUsage(update), timestamp };
+      return { type: "usage", ...chainField, sessionId, usage: normalizeUsage(update), timestamp };
     }
     default:
-      return unknownEvent(sessionId, updateId, timestamp, kind || "unknown", update, "未识别的 ACP session update");
+      return { ...unknownEvent(sessionId, updateId, timestamp, kind || "unknown", update, "未识别的 ACP session update"), ...chainField };
   }
 }
 
@@ -205,6 +216,24 @@ function unknownEvent(sessionId: string, updateId: string | undefined, timestamp
 
 function updateKind(update: JsonRecord): string {
   return stringValue(update.sessionUpdate ?? update.type ?? update.kind ?? update.event);
+}
+
+function extractChain(input: unknown, update: JsonRecord): "main" | "side" | "invalid" | undefined {
+  const root = isRecord(input) ? input : {};
+  const params = isRecord(root.params) ? root.params : {};
+  const candidates = [
+    recordValue(params._meta)?.["cognition.ai/chain"],
+    recordValue(root._meta)?.["cognition.ai/chain"],
+    recordValue(root.meta)?.["cognition.ai/chain"],
+    recordValue(update._meta)?.["cognition.ai/chain"],
+  ];
+  const marker = candidates.find((value) => value !== undefined);
+  if (marker === undefined) return undefined;
+  return marker === "main" || marker === "side" ? marker : "invalid";
+}
+
+function recordValue(value: unknown): JsonRecord | undefined {
+  return isRecord(value) ? value : undefined;
 }
 
 function contentValue(value: unknown): unknown {
