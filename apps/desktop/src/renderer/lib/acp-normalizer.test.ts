@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAcpUpdate } from "./acp-normalizer";
 import { createConversationState, reduceConversation } from "./conversation";
+import chainsFixture from "../../main/fixtures/acp-v1-chains.json";
 
 describe("ACP update normalizer", () => {
   it("maps streamed text/thought chunks and preserves their session", () => {
@@ -85,5 +86,19 @@ describe("ACP update normalizer", () => {
 
     expect(Object.keys(state.configOptions)).toEqual(["mode", "model"]);
     expect(state.configOptions.model?.currentValue).toBe("adaptive");
+  });
+
+  it("extracts only the verified side-chain envelope marker", () => {
+    expect(normalizeAcpUpdate(chainsFixture.sideUpdate)).toMatchObject({
+      type: "message_chunk",
+      sessionId: "session-fixture",
+      chainId: "side",
+      text: "[SAFE_SIDE_ANSWER]",
+    });
+    expect(normalizeAcpUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hidden" } },
+      _meta: { "cognition.ai/chain": { unknown: true } },
+    })).toMatchObject({ type: "unknown", diagnostic: "无法识别的 cognition.ai/chain 元数据" });
   });
 });

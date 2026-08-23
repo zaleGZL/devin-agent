@@ -1,0 +1,60 @@
+{
+  "source": {
+    "cli": "devin 3000.5.20 (2d902011)",
+    "capturedAt": "2026-08-23",
+    "sanitized": true
+  },
+  "agentCapabilities": {
+    "cognition.ai/editableCommands": true,
+    "cognition.ai/commandRevision": true
+  },
+  "permissionRequest": {
+    "sessionId": "session-fixture",
+    "toolCall": {
+      "toolCallId": "tool-fixture",
+      "_meta": {
+        "cognition.ai/editableCommand": "touch [SAFE_FILE]"
+      }
+    },
+    "options": [
+      {
+        "optionId": "allow_once",
+        "name": "Allow",
+        "kind": "allow_once"
+      },
+      {
+        "optionId": "reject_once",
+        "name": "Reject",
+        "kind": "reject_once"
+      }
+    ]
+  },
+  "editedPermissionResponse": {
+    "outcome": {
+      "outcome": "selected",
+      "optionId": "allow_once",
+      "_meta": {
+        "cognition.ai/updatedInput": {
+          "command": "touch [EDITED_SAFE_FILE]"
+        }
+      }
+    }
+  },
+  "finalPermissionResponse": {
+    "outcome": {
+      "outcome": "selected",
+      "optionId": "allow_once"
+    }
+  },
+  "commandRevision": {
+    "method": "_cognition.ai/command/revise",
+    "params": {
+      "sessionId": "session-fixture",
+      "command": "touch [SAFE_FILE]",
+      "note": "change the safe fixture filename"
+    },
+    "response": {
+      "command": "touch [REVISED_SAFE_FILE]"
+    }
+  }
+}

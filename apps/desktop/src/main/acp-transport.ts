@@ -17,7 +17,7 @@ export interface AcpSpawnOptions {
   args?: string[];
   spawn?: SpawnFunction;
   onNotification?: (method: string, params: unknown) => void;
-  onRequest?: (method: string, params: unknown) => Promise<unknown> | unknown;
+  onRequest?: (method: string, params: unknown, context?: { requestId: string | number | null }) => Promise<unknown> | unknown;
   onMalformedMessage?: (message: string) => void;
   onExit?: (result: AcpExitResult) => void;
 }
@@ -190,15 +190,22 @@ export class AcpTransport {
       const stream = ndJsonStream(output, input);
       const sdkClient = createAcpClient({ name: "devin-desktop" });
       // The SDK's handlers receive a context object. Registering the standard
-      // methods here ensures requestPermission/sessionUpdate are parsed and
+      // methods here ensures permission, elicitation and session updates are parsed and
       // answered by the official ACP implementation, not a hand-rolled JSON
       // RPC dispatcher.
       sdkClient.onRequest(methods.client.session.requestPermission, async (context) => {
-        const result = await this.options.onRequest?.(methods.client.session.requestPermission, context.params);
+        const result = await this.options.onRequest?.(methods.client.session.requestPermission, context.params, { requestId: context.requestId });
         return (result ?? { outcome: { outcome: "cancelled" } }) as never;
+      });
+      sdkClient.onRequest(methods.client.elicitation.create, async (context) => {
+        const result = await this.options.onRequest?.(methods.client.elicitation.create, context.params, { requestId: context.requestId });
+        return (result ?? { action: "cancel" }) as never;
       });
       sdkClient.onNotification(methods.client.session.update, async (context) => {
         this.options.onNotification?.(methods.client.session.update, context.params);
+      });
+      sdkClient.onNotification(methods.client.elicitation.complete, async (context) => {
+        this.options.onNotification?.(methods.client.elicitation.complete, context.params);
       });
       // Preserve Devin extension notifications for diagnostics when an
       // extension chooses a known custom method. ACP unknown requests are

@@ -76,6 +76,19 @@ describe("session index", () => {
     ]);
   });
 
+  it("distinguishes native titles and rejects an older server title", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devin-agent-session-index-"));
+    temporaryDirectories.push(directory);
+    configureSessionIndex(path.join(directory, "sessions.json"));
+    await upsertSessionSummary({ id: "native", path: "native", cwd: "/tmp/project", title: "Old", createdAt: "2026-08-21T09:00:00Z", updatedAt: "2026-08-21T09:00:00Z", titleSource: "server", titleUpdatedAt: "2026-08-21T09:00:00Z" });
+
+    const renamed = await renameSession("native", "Confirmed", "native");
+    expect(renamed).toMatchObject({ title: "Confirmed", titleSource: "native" });
+    expect(renamed?.customTitle).toBeUndefined();
+    await upsertSessionSummary({ id: "native", path: "native", cwd: "/tmp/project", title: "Stale", createdAt: "2026-08-21T09:00:00Z", updatedAt: "2026-08-21T09:00:01Z", titleSource: "server", titleUpdatedAt: "2026-08-21T09:00:01Z" });
+    await expect(listSessions()).resolves.toEqual([expect.objectContaining({ title: "Confirmed", titleSource: "native" })]);
+  });
+
   it("persists a custom sidebar order across later ACP summary updates", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devin-agent-session-index-"));
     temporaryDirectories.push(directory);

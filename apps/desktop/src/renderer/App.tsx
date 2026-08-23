@@ -28,8 +28,10 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  Copy,
   CornerDownLeft,
   CornerDownRight,
+  Download,
   Ellipsis,
   ExternalLink,
   Eye,
@@ -80,6 +82,7 @@ import type {
   AuthUiEvent,
   ColorSchemePreference,
   DevinCliUpdateStatus,
+  DesktopInteractionRequest,
   ExtensionUiRequest,
   LanguagePreference,
   PermissionMode,
@@ -134,6 +137,15 @@ import {
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
+import { markdownExportFileName } from "../shared/markdown-export";
+import { assistantResponseText, formatSessionMarkdown } from "./lib/session-export";
+import {
+  beginChainConversation,
+  chainConversationKey,
+  reduceChainConversation,
+  settleChainConversation,
+  type ChainConversationStore,
+} from "./lib/chains";
 import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
 import { resolvePreferredModeId } from "./lib/mode-selection";
@@ -152,6 +164,7 @@ import { InlineMentionEditor, type InlineMentionEditorHandle } from "./lib/inlin
 import { resolveNewTaskCwd } from "./lib/workspace-context";
 import { partitionSidebarSessions } from "./lib/sidebar-sessions";
 import { clearSessionUnread, markBackgroundSessionUnread } from "./lib/session-attention";
+import { confirmSessionRename, optimisticSessionRename, rollbackSessionRename } from "./lib/session-rename";
 import {
   enqueueFollowUp,
   moveFollowUp,
@@ -168,8 +181,9 @@ import {
   reorderSessionsWithinGroup,
   type SidebarSessionGroupKey,
 } from "./lib/sidebar-order";
-import type { DevinCapabilities } from "../shared/capabilities";
+import { getFeatureGate, type DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
+import { initialElicitationValues, validateElicitationValues } from "../shared/interactions";
 
 interface Attachment extends ChatImage {
   name: string;
@@ -345,6 +359,9 @@ export default function App() {
   const [sessionRenameDraft, setSessionRenameDraft] = useState("");
   const [sidebarDrag, setSidebarDrag] = useState<SidebarDragState>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
+  const [interactionRequests, setInteractionRequests] = useState<DesktopInteractionRequest[]>([]);
+  const [chainConversations, setChainConversations] = useState<ChainConversationStore>({});
+  const [sideChatOpen, setSideChatOpen] = useState(false);
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<InlineMentionEditorHandle>(null);
@@ -381,11 +398,15 @@ export default function App() {
   const drainingFollowUpSessionIdsRef = useRef(new Set<string>());
   const drainFollowUpQueueRef = useRef<(sessionId: string) => void>(() => undefined);
   const unreadSessionIdsRef = useRef(new Set<string>());
+  const chainGenerationRef = useRef(1);
   const workspacesRef = useRef<WorkspaceItem[]>([]);
   const sessionsRef = useRef<SessionSummary[]>([]);
   const sidebarDragRef = useRef<SidebarDragSnapshot | undefined>(undefined);
   const running = activeSession ? runningSessionIds.has(activeSession) : false;
   const activeFollowUps = activeSession ? followUpQueues.get(activeSession) ?? [] : [];
+  const sideChatCommand = availableCommands.find((command) => command.name.replace(/^\//, "").toLowerCase() === "btw");
+  const sideChatEnabled = Boolean(capabilities && getFeatureGate({ ...capabilities, commands: availableCommands }, "chain-sidechat").enabled);
+  const sideChatState = activeSession ? chainConversations[chainConversationKey(activeSession, "side")] : undefined;
   const mentionTrigger = findAtTrigger(draft, textareaRef.current?.getCaret() ?? draft.length, draftMentions);
   const mentionQuery = mentionTrigger?.query ?? "";
   const mentionOptions = useMemo<MentionMenuOption[]>(() => {
@@ -1020,6 +1041,25 @@ export default function App() {
           setUiRequest(request);
         }
       }
+      if (event.type === "interaction_request" && isDesktopInteractionRequest(event.request)) {
+        const interaction = event.request;
+        setInteractionRequests((current) => {
+          const existing = current.findIndex((request) => request.id === interaction.id);
+          return existing < 0
+            ? [...current, interaction]
+            : current.map((request, index) => index === existing ? interaction : request);
+        });
+        return;
+      }
+      if (event.type === "interaction_closed" && typeof event.id === "string") {
+        setInteractionRequests((current) => current.filter((request) => request.id !== event.id));
+        return;
+      }
+      if (event.type === "session_renamed" && isSessionSummary(event.session)) {
+        const renamed = event.session;
+        setSessions((current) => current.map((session) => session.id === renamed.id ? renamed : session));
+        return;
+      }
       if (event.type === "permission_request" && typeof event.id === "string") {
         const permissionOptions = Array.isArray(event.options)
           ? event.options.flatMap((option) => {
@@ -1043,7 +1083,18 @@ export default function App() {
         return;
       }
       if (event.type === "agent_start") return;
+      if (event.type === "connection_generation") {
+        chainGenerationRef.current += 1;
+        setChainConversations({});
+        setInteractionRequests([]);
+        return;
+      }
       if (event.type === "agent_state") {
+        if (event.state === "error" || event.state === "auth-required" || event.state === "stopping" || event.state === "closed") {
+          chainGenerationRef.current += 1;
+          setChainConversations({});
+          setInteractionRequests([]);
+        }
         if (event.state === "error" || event.state === "auth-required") {
           runningSessionIdsRef.current = new Set();
           setRunningSessionIds(new Set());
@@ -1066,6 +1117,10 @@ export default function App() {
       const normalized = normalizeAcpUpdate(event, typeof event.sessionId === "string" ? event.sessionId : "unknown-session");
       const normalizedSessionId = normalized.sessionId || eventSessionId;
       const isActiveUpdate = !normalizedSessionId || normalizedSessionId === activeSessionRef.current;
+      if (normalized.chainId) {
+        setChainConversations((current) => reduceChainConversation(current, normalized, chainGenerationRef.current));
+        return;
+      }
       if (normalized.type === "commands") {
         if (normalizedSessionId) sessionCommandsRef.current.set(normalizedSessionId, normalized.commands);
         if (isActiveUpdate) setAvailableCommands(normalized.commands);
@@ -1114,6 +1169,7 @@ export default function App() {
       runningSessionIdsRef.current = new Set();
       setRunningSessionIds(new Set());
       setUiRequest(undefined);
+      setInteractionRequests([]);
       setToast({ message: cleanError(message), type: "error" });
     });
     const offAuth = window.devinAgent.auth.onEvent((event) => {
@@ -1180,7 +1236,7 @@ export default function App() {
       previousConversationScrollTopRef.current = scroller.scrollTop;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, running, uiRequest]);
+  }, [interactionRequests, messages, running, uiRequest]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -1535,21 +1591,16 @@ export default function App() {
       cancelSessionRename();
       return;
     }
-    const previousTitle = session.title;
-    const previousCustomTitle = session.customTitle;
+    const previous = session;
     setRenamingSessionId(undefined);
     setSessionRenameDraft("");
-    setSessions((current) => current.map((item) => item.id === session.id ? { ...item, title, customTitle: title } : item));
+    setSessions((current) => current.map((item) => item.id === session.id ? optimisticSessionRename(item, title) : item));
     try {
       const renamed = await window.devinAgent.sessions.rename?.(session.id, title);
       if (!renamed) throw new Error(t("session.renameFailed"));
-      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...renamed } : item));
+      setSessions((current) => current.map((item) => item.id === session.id ? confirmSessionRename(item, renamed) : item));
     } catch (error) {
-      setSessions((current) => current.map((item) => item.id === session.id ? {
-        ...item,
-        title: previousTitle,
-        ...(previousCustomTitle ? { customTitle: previousCustomTitle } : { customTitle: undefined }),
-      } : item));
+      setSessions((current) => current.map((item) => item.id === session.id ? rollbackSessionRename(item, previous) : item));
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
@@ -1725,10 +1776,35 @@ export default function App() {
     setToast({ message: t("plan.sent"), type: "info" });
   }, [dispatchPrompt, interruptAndDispatch, locale, t]);
 
+  const sendSideChat = async (question: string) => {
+    const sessionId = activeSessionRef.current;
+    const normalized = question.trim().replace(/^\/btw\s*/i, "");
+    if (!sessionId || !normalized || !sideChatEnabled) {
+      setToast({ message: t("sideChat.unavailable"), type: "error" });
+      return;
+    }
+    const generation = chainGenerationRef.current;
+    setSideChatOpen(true);
+    setChainConversations((current) => beginChainConversation(current, sessionId, "side", normalized, generation));
+    try {
+      await window.devinAgent.agent.command("side_chat", { sessionId, message: normalized });
+      setChainConversations((current) => settleChainConversation(current, sessionId, "side", generation));
+    } catch (error) {
+      const message = cleanError(error instanceof Error ? error.message : String(error));
+      setChainConversations((current) => settleChainConversation(current, sessionId, "side", generation, message));
+      setToast({ message, type: "error" });
+    }
+  };
+
   const sendMessage = async ({ interrupt = false }: { interrupt?: boolean } = {}) => {
     if (sessionLocked) return;
     const text = draft.trim();
     if (!text && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0) return;
+    if (/^\/btw(?:\s|$)/i.test(text) && attachments.length === 0 && draftAnnotations.length === 0 && draftMentions.length === 0) {
+      setDraft("");
+      await sendSideChat(text);
+      return;
+    }
     if (attachments.length > 0 && !imagePromptEnabled) {
       setToast({ message: t("composer.imagesUnavailable"), type: "error" });
       return;
@@ -1839,6 +1915,10 @@ export default function App() {
 
   const runAvailableCommand = async (command: AvailableCommand) => {
     const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
+    if (/^\/btw$/i.test(name)) {
+      setSideChatOpen(true);
+      return;
+    }
     if (/^\/handoff\b/i.test(name) && !window.confirm("Handoff moves this task to a cloud Devin session. Continue?")) return;
     const targetSessionId = activeSessionRef.current;
     if (!targetSessionId) return;
@@ -2367,6 +2447,18 @@ export default function App() {
   const sessionMenuItem = sessionMenu ? sessions.find((session) => session.id === sessionMenu.sessionId) : undefined;
   const projectMenuItem = projectMenu ? workspaces.find((item) => item.path === projectMenu.path) : undefined;
 
+  const downloadSessionMarkdown = async () => {
+    try {
+      const result = await window.devinAgent.app.saveMarkdown({
+        defaultName: markdownExportFileName(activeTitle),
+        content: formatSessionMarkdown(activeTitle, messages),
+      });
+      if (result.saved) setToast({ message: t("session.downloadedMarkdown"), type: "info" });
+    } catch (error) {
+      setToast({ message: t("session.downloadFailed", { error: cleanError(error instanceof Error ? error.message : String(error)) }), type: "error" });
+    }
+  };
+
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}${sidebarDrag ? " sidebar-is-dragging" : ""}`}>
       <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`} inert={!sidebarOpen}>
@@ -2711,6 +2803,16 @@ export default function App() {
                 <div className="thread-heading"><strong>{crop(activeTitle, 62)}</strong><span>{sessionLocked ? <Shield size={12} /> : workspace ? <GitBranch size={12} /> : <MessageSquareText size={12} />} {sessionLocked ? "Read-only Devin session" : workspaceName ?? t("status.regularTask")}</span></div>
               </div>
               <div className="header-actions">
+                <button
+                  type="button"
+                  className="icon-button session-download-button"
+                  onClick={() => void downloadSessionMarkdown()}
+                  disabled={loading || running || messages.length === 0}
+                  aria-label={t("session.downloadMarkdown")}
+                  title={t("session.downloadMarkdown")}
+                >
+                  <Download size={16} />
+                </button>
                 {workspace && <button
                   className={`changes-toolbar-button${inspectorOpen && inspectorMode === "changes" ? " selected" : ""}`}
                   onClick={() => inspectorOpen && inspectorMode === "changes" ? closePreviewPanel() : showChangesPanel()}
@@ -2763,7 +2865,7 @@ export default function App() {
             >
               {loading ? (
                 <div className="loading-state"><LoaderCircle className="spin" size={20} /><span>{t("status.openingWorkspace")}</span></div>
-              ) : messages.length === 0 && !uiRequest && !agentPlan ? (
+              ) : messages.length === 0 && !uiRequest && interactionRequests.length === 0 && !agentPlan ? (
                 <EmptyState workspace={workspace} onSuggest={(value) => { setDraft(value); textareaRef.current?.focus(); }} />
               ) : (
                 <div className="messages">
@@ -2776,6 +2878,7 @@ export default function App() {
                           active={group.id === activeAssistantGroupId}
                           showReasoningProcess={showReasoningProcess}
                           onPreviewFile={(filePath) => void openFilePreview(filePath)}
+                          onCopyError={() => setToast({ message: t("message.copyFailed"), type: "error" })}
                         />
                   ))}
                   {agentPlan && <EditablePlanCard plan={agentPlan} onSave={applyEditedPlan} />}
@@ -2795,6 +2898,23 @@ export default function App() {
                       onRevisePlan={applyEditedMarkdownPlan}
                       onDone={() => setUiRequest(undefined)}
                       onError={(message) => setToast({ message, type: "error" })}
+                    />
+                  )}
+                  {interactionRequests[0] && (
+                    <DesktopInteractionCard
+                      key={interactionRequests[0].id}
+                      request={interactionRequests[0]}
+                      queuedCount={interactionRequests.length - 1}
+                      onError={(message) => setToast({ message, type: "error" })}
+                    />
+                  )}
+                  {sideChatOpen && sideChatCommand && (
+                    <SideChatPanel
+                      command={sideChatCommand}
+                      state={sideChatState}
+                      enabled={sideChatEnabled}
+                      onSend={(question) => void sendSideChat(question)}
+                      onClose={() => setSideChatOpen(false)}
                     />
                   )}
                 </div>
@@ -3648,13 +3768,33 @@ function AssistantTurn({
   active,
   showReasoningProcess,
   onPreviewFile,
+  onCopyError,
 }: {
   messages: ChatMessage[];
   active: boolean;
   showReasoningProcess: boolean;
   onPreviewFile(filePath: string): void;
+  onCopyError(): void;
 }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
   const { work, responses } = splitAssistantTurn(messages, active);
+  const copyText = assistantResponseText(messages);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_800);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const copyResponse = async () => {
+    try {
+      await window.devinAgent.app.copyText(copyText);
+      setCopied(true);
+    } catch {
+      onCopyError();
+    }
+  };
 
   return (
     <article className="assistant-message">
@@ -3673,6 +3813,14 @@ function AssistantTurn({
           {response.streaming && <span className="stream-cursor" />}
         </div>
       ))}
+      {!active && copyText && (
+        <div className="assistant-response-actions">
+          <button type="button" className="assistant-copy-action" onClick={() => void copyResponse()} aria-label={copied ? t("message.copied") : t("message.copyResponse")}>
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copied ? t("message.copied") : t("message.copy")}</span>
+          </button>
+        </div>
+      )}
     </article>
   );
 }
@@ -4682,6 +4830,237 @@ function SessionSearchDialog({
   );
 }
 
+function SideChatPanel({
+  command,
+  state,
+  enabled,
+  onSend,
+  onClose,
+}: {
+  command: AvailableCommand;
+  state?: ChainConversationStore[string];
+  enabled: boolean;
+  onSend(question: string): void;
+  onClose(): void;
+}) {
+  const { t } = useI18n();
+  const [question, setQuestion] = useState("");
+  const input = command.input && typeof command.input === "object" && !Array.isArray(command.input)
+    ? command.input as Record<string, unknown>
+    : {};
+  const hint = typeof input.hint === "string" ? input.hint : t("sideChat.placeholder");
+  const submit = () => {
+    if (!question.trim() || state?.running || !enabled) return;
+    onSend(question.trim());
+    setQuestion("");
+  };
+  return (
+    <section className="side-chat-panel" aria-label={t("sideChat.title")}>
+      <header>
+        <span><MessageSquareQuote size={15} /><strong>/{command.name.replace(/^\//, "")}</strong></span>
+        <button type="button" onClick={onClose} aria-label={t("common.close")}><X size={14} /></button>
+      </header>
+      {command.description && <p>{command.description}</p>}
+      <div className="side-chat-messages">
+        {(state?.messages ?? []).map((message) => (
+          <article key={message.id} className={`side-chat-message ${message.role}`}>
+            <strong>{message.role === "user" ? t("sideChat.you") : "Devin"}</strong>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+            {message.tools.map((tool) => <small key={tool.id}>{tool.title} · {tool.status}</small>)}
+          </article>
+        ))}
+        {state?.running && <div className="side-chat-running"><LoaderCircle className="spin" size={13} />{t("sideChat.thinking")}</div>}
+        {state?.error && <div className="interaction-error" role="alert">{state.error}</div>}
+      </div>
+      <div className="side-chat-composer">
+        <input
+          value={question}
+          disabled={!enabled || state?.running}
+          placeholder={hint}
+          aria-label={t("sideChat.placeholder")}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <button type="button" disabled={!enabled || Boolean(state?.running) || !question.trim()} onClick={submit}><ArrowUp size={14} /><span className="sr-only">{t("composer.send")}</span></button>
+      </div>
+    </section>
+  );
+}
+
+function DesktopInteractionCard({
+  request,
+  queuedCount,
+  onError,
+}: {
+  request: DesktopInteractionRequest;
+  queuedCount: number;
+  onError(message: string): void;
+}) {
+  const { locale, t } = useI18n();
+  const [busy, setBusy] = useState<string>();
+  const [opened, setOpened] = useState(false);
+  const [command, setCommand] = useState(request.kind === "permission" ? request.editableCommand?.command ?? "" : "");
+  const [revisionNote, setRevisionNote] = useState("");
+  const [values, setValues] = useState<Record<string, unknown>>(
+    request.kind === "elicitation-form" ? initialElicitationValues(request.form) : {},
+  );
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (request.kind === "permission" && request.editableCommand) setCommand(request.editableCommand.command);
+  }, [request]);
+
+  const respond = async (response: Record<string, unknown>, action: string) => {
+    if (busy) return undefined;
+    setBusy(action);
+    try {
+      const result = await window.devinAgent.agent.respondToUi(request.id, response);
+      if (result && typeof result === "object" && result.pending) setBusy(undefined);
+      return result;
+    } catch (error) {
+      setBusy(undefined);
+      onError(cleanError(error instanceof Error ? error.message : String(error)));
+      return undefined;
+    }
+  };
+
+  const submitForm = async () => {
+    if (request.kind !== "elicitation-form") return;
+    const validated = validateElicitationValues(request.form, values);
+    setErrors(validated.errors);
+    if (!validated.ok) return;
+    await respond({ action: "accept", content: validated.content }, "accept");
+  };
+
+  const submitRevision = async () => {
+    if (request.kind !== "permission" || !request.commandRevision || !revisionNote.trim()) return;
+    const nextRevision = request.commandRevision.revision + 1;
+    const result = await respond({ action: "revise", instruction: revisionNote.trim(), revision: nextRevision }, "revise");
+    if (result && typeof result === "object" && result.pending) setRevisionNote("");
+  };
+
+  return (
+    <section className="inline-request desktop-interaction" aria-live="polite">
+      <div className="inline-request-icon">{request.kind === "elicitation-form" ? <MessageSquareText size={16} /> : request.kind === "elicitation-url" ? <ExternalLink size={16} /> : <TerminalSquare size={16} />}</div>
+      <div className="inline-request-body">
+        <h3>{request.kind === "permission" ? request.title : request.kind === "elicitation-form" ? request.form.title ?? t("interaction.formTitle") : t("interaction.urlTitle")}</h3>
+        <p>{request.message}</p>
+
+        {request.kind === "permission" && (
+          <>
+            {request.editableCommand && (
+              <label className="interaction-field command-editor">
+                <span>{t("interaction.command")}</span>
+                <textarea value={command} disabled={Boolean(busy)} onChange={(event) => setCommand(event.target.value)} aria-label={t("interaction.command")} />
+                {command.trim() !== request.editableCommand.command.trim() && <small>{t("interaction.reviewEditedCommand")}</small>}
+              </label>
+            )}
+            {request.commandRevision && (
+              <div className="command-revision-row">
+                <input
+                  value={revisionNote}
+                  disabled={Boolean(busy)}
+                  onChange={(event) => setRevisionNote(event.target.value)}
+                  placeholder={t("interaction.revisionPlaceholder")}
+                  aria-label={t("interaction.revisionPlaceholder")}
+                />
+                <button disabled={Boolean(busy) || !revisionNote.trim()} onClick={() => void submitRevision()}>
+                  {busy === "revise" && <LoaderCircle className="spin" size={14} />}{t("interaction.revise")}
+                </button>
+              </div>
+            )}
+            <div className="approval-options">
+              {request.options.map((option) => (
+                <button
+                  key={option.id}
+                  disabled={Boolean(busy)}
+                  onClick={() => void respond({
+                    action: "select",
+                    optionId: option.id,
+                    ...(request.editableCommand && command.trim() !== request.editableCommand.command.trim()
+                      ? { updatedCommand: command }
+                      : {}),
+                  }, `select:${option.id}`)}
+                >
+                  <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
+                  {busy === `select:${option.id}` ? <LoaderCircle className="spin" size={14} /> : <ChevronRight size={14} />}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {request.kind === "elicitation-form" && (
+          <div className="interaction-form">
+            {request.form.description && <p className="interaction-description">{request.form.description}</p>}
+            {request.form.fields.map((field) => (
+              <label className={`interaction-field${errors[field.name] ? " invalid" : ""}`} key={field.name}>
+                <span>{field.title}{field.required ? " *" : ""}</span>
+                {field.description && <small>{field.description}</small>}
+                {field.type === "boolean" ? (
+                  <input type="checkbox" checked={values[field.name] === true} disabled={Boolean(busy)} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.checked }))} />
+                ) : field.type === "array" && field.choices ? (
+                  <span className="interaction-check-list">
+                    {field.choices.map((choice) => {
+                      const selected = Array.isArray(values[field.name]) ? values[field.name] as string[] : [];
+                      return <span key={choice.value}><input type="checkbox" checked={selected.includes(choice.value)} disabled={Boolean(busy)} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.checked ? [...selected, choice.value] : selected.filter((item) => item !== choice.value) }))} />{choice.label}</span>;
+                    })}
+                  </span>
+                ) : field.choices ? (
+                  <select value={typeof values[field.name] === "string" ? values[field.name] as string : ""} disabled={Boolean(busy)} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}>
+                    <option value="">{t("interaction.chooseValue")}</option>
+                    {field.choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type={field.type === "number" || field.type === "integer" ? "number" : field.format === "date" ? "date" : field.format === "email" ? "email" : "text"}
+                    step={field.type === "integer" ? 1 : field.type === "number" ? "any" : undefined}
+                    value={typeof values[field.name] === "string" || typeof values[field.name] === "number" ? String(values[field.name]) : ""}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => setValues((current) => ({
+                      ...current,
+                      [field.name]: field.type === "number" || field.type === "integer"
+                        ? event.target.value === "" ? undefined : Number(event.target.value)
+                        : event.target.value,
+                    }))}
+                  />
+                )}
+                {errors[field.name] && <small className="interaction-error" role="alert">{localizeInteractionError(errors[field.name], locale)}</small>}
+              </label>
+            ))}
+          </div>
+        )}
+
+        {request.kind === "elicitation-url" && (
+          <div className="interaction-url">
+            <strong>{request.origin}</strong>
+            <small>{t(opened ? "interaction.waitingCompletion" : "interaction.externalWarning")}</small>
+          </div>
+        )}
+
+        <div className="inline-request-actions">
+          {request.kind === "elicitation-url" && (
+            <button className="primary-button" disabled={Boolean(busy) || opened} onClick={() => void respond({ action: "open" }, "open").then((result) => {
+              if (result && typeof result === "object" && result.pending) setOpened(true);
+            })}>
+              {busy === "open" && <LoaderCircle className="spin" size={14} />}{t("interaction.openBrowser")}
+            </button>
+          )}
+          {request.kind === "elicitation-form" && <button className="primary-button" disabled={Boolean(busy)} onClick={() => void submitForm()}>{busy === "accept" && <LoaderCircle className="spin" size={14} />}{t("interaction.submit")}</button>}
+          {request.kind !== "permission" && <button disabled={Boolean(busy)} onClick={() => void respond({ action: "decline" }, "decline")}>{t("interaction.decline")}</button>}
+          <button disabled={Boolean(busy)} onClick={() => void respond({ action: "cancel" }, "cancel")}>{t("common.cancel")}</button>
+        </div>
+        {queuedCount > 0 && <small className="interaction-queue">{t("interaction.queued", { count: queuedCount })}</small>}
+      </div>
+    </section>
+  );
+}
+
 function InlineExtensionRequest({
   request,
   tools,
@@ -5505,4 +5884,36 @@ function crop(value: string, length: number): string {
 
 function cleanError(value: string): string {
   return value.replace(/^Error invoking remote method '[^']+':\s*/i, "").split("\n").filter(Boolean).slice(0, 3).join(" ");
+}
+
+function localizeInteractionError(value: string, locale: string): string {
+  if (locale !== "en") return value;
+  if (value === "此字段为必填项") return "This field is required.";
+  if (value === "值类型不符合字段要求") return "The value has the wrong type.";
+  if (value === "输入格式不符合要求") return "The value does not match the required format.";
+  if (value === "选择值不在允许范围内") return "Choose only an allowed value.";
+  return value
+    .replace(/^至少输入 (\d+) 个字符$/, "Enter at least $1 characters.")
+    .replace(/^最多输入 (\d+) 个字符$/, "Enter no more than $1 characters.")
+    .replace(/^值不能小于 (.+)$/, "The value must be at least $1.")
+    .replace(/^值不能大于 (.+)$/, "The value must be no more than $1.")
+    .replace(/^至少选择 (\d+) 项$/, "Choose at least $1 items.")
+    .replace(/^最多选择 (\d+) 项$/, "Choose no more than $1 items.");
+}
+
+function isDesktopInteractionRequest(value: unknown): value is DesktopInteractionRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const request = value as Record<string, unknown>;
+  return typeof request.id === "string"
+    && Number.isSafeInteger(request.generation)
+    && (request.kind === "permission" || request.kind === "elicitation-form" || request.kind === "elicitation-url");
+}
+
+function isSessionSummary(value: unknown): value is SessionSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const session = value as Record<string, unknown>;
+  return typeof session.id === "string"
+    && typeof session.cwd === "string"
+    && typeof session.title === "string"
+    && typeof session.updatedAt === "string";
 }

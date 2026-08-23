@@ -141,6 +141,8 @@ export function mapRuntimeSessionSummary(value: unknown, fallbackCwd = ""): Sess
     path: id,
     cwd,
     title: stringValue(value.title) || id,
+    titleSource: "server",
+    titleUpdatedAt: updatedAt,
     createdAt,
     updatedAt,
     provider: "devin",

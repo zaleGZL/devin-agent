@@ -1,7 +1,6 @@
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 if (process.env.DEVIN_LIVE_TEST !== "1") {
   throw new Error("Set DEVIN_LIVE_TEST=1 to acknowledge that this smoke test sends minimal prompts through your authenticated Devin CLI.");
@@ -11,9 +10,12 @@ const buildDirectory = path.resolve("dist-electron");
 const hostModuleName = (await readdir(buildDirectory)).find((name) => /^devin-acp-host-[A-Z0-9]+\.mjs$/.test(name));
 if (!hostModuleName) throw new Error("Build the Desktop app before running the live Devin smoke test.");
 const { DevinAcpHost } = await import(pathToFileURL(path.join(buildDirectory, hostModuleName)).href);
-const cwd = await mkdtemp(path.join(os.tmpdir(), "devin-agent-live-"));
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const cwd = await mkdtemp(path.join(path.dirname(repositoryRoot), "devin-agent-live-"));
 const updateKinds = new Set();
+const availableCommands = new Set();
 let permissionRequests = 0;
+let elicitationRequests = 0;
 const promptResults = [];
 const mentionResults = [];
 let createdSession;
@@ -23,10 +25,22 @@ let recoveryHost;
 const options = {
   cwd,
   ...(process.env.DEVIN_CLI_PATH ? { binaryPath: process.env.DEVIN_CLI_PATH } : {}),
-  onUpdate: (event) => updateKinds.add(event.update?.sessionUpdate ?? event.update?.type ?? "unknown"),
+  onUpdate: (event) => {
+    updateKinds.add(event.update?.sessionUpdate ?? event.update?.type ?? "unknown");
+    if (event.update?.sessionUpdate === "available_commands_update" && Array.isArray(event.update.availableCommands)) {
+      for (const command of event.update.availableCommands) {
+        const name = typeof command === "string" ? command : command?.name;
+        if (typeof name === "string") availableCommands.add(name.replace(/^\//, "").toLowerCase());
+      }
+    }
+  },
   onPermissionRequest: () => {
     permissionRequests += 1;
     return null;
+  },
+  onElicitationRequest: () => {
+    elicitationRequests += 1;
+    return { action: "cancel" };
   },
 };
 
@@ -51,11 +65,23 @@ try {
   if (!imageSupported) throw new Error("The current live Devin session/model did not advertise image input.");
   const imageData = (await readFile(path.resolve("build/icon.png"))).toString("base64");
 
+  if (!firstHost.hasExtension("cognition.ai/chains") || !availableCommands.has("btw")) {
+    throw new Error("The live Devin session did not jointly advertise chains and /btw.");
+  }
+  const sideChatResult = await firstHost.sideChat("Reply with OK only. Do not run tools or modify files. This verifies the side chain.");
+  promptResults.push(`side:${sideChatResult.stopReason ?? "unknown"}`);
+
   const imageResult = await firstHost.prompt([
     { type: "text", text: "Reply with OK only. Do not run tools or modify files. This is a Desktop ACP smoke test." },
     { type: "image", mimeType: "image/png", data: imageData },
   ]);
   promptResults.push(imageResult.stopReason ?? "unknown");
+
+  if (!firstHost.hasExtension("cognition.ai/sessionRename")) throw new Error("The live Devin session did not advertise native rename.");
+  const smokeTitle = `Desktop ACP smoke ${Date.now()}`;
+  await firstHost.renameSession(createdSession.sessionId, smokeTitle);
+  const renamed = (await firstHost.listSessions({ cwd })).sessions.some((session) => session.sessionId === createdSession.sessionId && session.title === smokeTitle);
+  if (!renamed) throw new Error("Native session rename was not visible in session/list.");
 
   const mentionDirectory = path.join(cwd, "docs");
   const mentionFile = path.join(mentionDirectory, "context.txt");
@@ -86,6 +112,9 @@ try {
     promptResults.push(permissionResult.stopReason ?? "unknown");
   }
 
+  await firstHost.prompt("Use ask_user_question to ask whether this ACP smoke test should continue. Do not run tools or modify files.").catch(() => undefined);
+  if (elicitationRequests === 0) throw new Error("The live Devin session did not route ask_user_question through elicitation/create.");
+
   const cancellable = firstHost.prompt("Think briefly, then reply with the word CANCEL-SMOKE. Do not use tools or modify files.");
   setTimeout(() => { void firstHost.cancel(); }, 25);
   await cancellable.catch(() => undefined);
@@ -105,6 +134,9 @@ try {
     modeWrite: Boolean(currentMode),
     modelWrite: Boolean(imageModelOption?.value),
     permissionRequests,
+    elicitationRequests,
+    chainsAdvertised: availableCommands.has("btw"),
+    nativeRename: true,
     mentionResults,
     promptResults,
     recovered,
@@ -115,4 +147,5 @@ try {
   if (createdSession && firstHost) await firstHost.deleteSession(createdSession.sessionId, createdSession).catch(() => undefined);
   if (firstHost) await firstHost.stop().catch(() => undefined);
   if (recoveryHost) await recoveryHost.stop().catch(() => undefined);
+  await rm(cwd, { recursive: true, force: true });
 }

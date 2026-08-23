@@ -13,6 +13,8 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     version: () => ipcRenderer.invoke("app:version"),
     homeDirectory: () => ipcRenderer.invoke("app:home-directory"),
     openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
+    copyText: (text) => ipcRenderer.invoke("app:copy-text", text),
+    saveMarkdown: (request) => ipcRenderer.invoke("app:save-markdown", request),
   },
   settings: {
     getColorScheme: () => ipcRenderer.invoke("settings:get-color-scheme"),

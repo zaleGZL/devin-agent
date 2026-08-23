@@ -1,6 +1,7 @@
 /** Public types shared by the Electron preload and React renderer. */
 
 import type { DevinCapabilities } from "./capabilities";
+import type { MarkdownExportRequest, MarkdownExportResult } from "./markdown-export";
 import type { MentionSearchRequest, MentionSearchResult, SkillListRequest, SkillMentionRef } from "./mentions";
 
 export const PROVIDER_IDS = ["devin"] as const;
@@ -62,6 +63,10 @@ export interface SessionSummary {
   title: string;
   /** App-local title override. Devin remains the transcript source of truth. */
   customTitle?: string;
+  /** Records whether the visible title is local-only or confirmed by Devin. */
+  titleSource?: "local" | "native" | "server";
+  /** Timestamp used to reject stale session/list title snapshots. */
+  titleUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
   provider?: ProviderId;
@@ -179,6 +184,8 @@ export type ExtensionUiRequest = {
   [key: string]: unknown;
 };
 
+export type { DesktopInteractionRequest } from "./interactions";
+
 export type AuthUiEvent =
   | { kind: "prompt"; id: string; prompt: { type: string; message: string; placeholder?: string; options?: Array<{ id: string; label: string; description?: string }> } }
   | { kind: "notice"; event: { type: string; message?: string; url?: string; instructions?: string; userCode?: string; verificationUri?: string } }
@@ -191,6 +198,8 @@ export interface DesktopApi {
     version(): Promise<string>;
     homeDirectory(): Promise<string>;
     openExternal(url: string): Promise<void>;
+    copyText(text: string): Promise<void>;
+    saveMarkdown(request: MarkdownExportRequest): Promise<MarkdownExportResult>;
   };
   settings: {
     getColorScheme(): Promise<ColorSchemePreference>;
@@ -256,7 +265,7 @@ export interface DesktopApi {
     start(options: AgentStartOptions): Promise<AgentSnapshot>;
     stop(): Promise<void>;
     command<T = unknown>(type: string, data?: Record<string, unknown>): Promise<T>;
-    respondToUi(id: string, response: Record<string, unknown>): Promise<void>;
+    respondToUi(id: string, response: Record<string, unknown>): Promise<{ pending?: boolean } | void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     onError(listener: (message: string) => void): () => void;
   };
