@@ -51,12 +51,18 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
   const composing = useRef(false);
   const compositionJustEnded = useRef(false);
   const compositionGuardTimer = useRef<number | undefined>(undefined);
+  const inputSyncFrame = useRef<number | undefined>(undefined);
   const pendingCaret = useRef<number | undefined>(undefined);
 
   const clearCompositionEndGuard = () => {
     compositionJustEnded.current = false;
     if (compositionGuardTimer.current !== undefined) window.clearTimeout(compositionGuardTimer.current);
     compositionGuardTimer.current = undefined;
+  };
+
+  const cancelInputSync = () => {
+    if (inputSyncFrame.current !== undefined) window.cancelAnimationFrame(inputSyncFrame.current);
+    inputSyncFrame.current = undefined;
   };
 
   const readValue = useCallback(() => {
@@ -105,12 +111,20 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
         const expected = mentions[index];
         return expected?.id === mention.id && expected.start === mention.start && expected.end === mention.end;
       });
-    if (current.value !== value || !mentionStateMatches) renderInlineMentionEditor(editor, value, mentions);
-    if (pendingCaret.current !== undefined) {
-      setEditorCaret(editor, pendingCaret.current);
-      pendingCaret.current = undefined;
+    const needsRender = current.value !== value || !mentionStateMatches;
+    if (needsRender) {
+      renderInlineMentionEditor(editor, value, mentions);
+      if (pendingCaret.current !== undefined) setEditorCaret(editor, pendingCaret.current);
     }
+    // Preserve the browser-owned selection after native input/composition.
+    // Resetting it commits some macOS IMEs' first preedit character as plain text.
+    pendingCaret.current = undefined;
   }, [mentions, value]);
+
+  useLayoutEffect(() => () => {
+    cancelInputSync();
+    clearCompositionEndGuard();
+  }, []);
 
   return (
     <div
@@ -122,7 +136,16 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
       aria-disabled={disabled || undefined}
       data-placeholder={placeholder}
       spellCheck
-      onInput={() => { if (!composing.current) emitChange(); }}
+      onInput={() => {
+        if (composing.current) return;
+        cancelInputSync();
+        // Doubao IME can deliver input before keydown/compositionstart. Defer
+        // state reconciliation so the native composition can claim that text.
+        inputSyncFrame.current = window.requestAnimationFrame(() => {
+          inputSyncFrame.current = undefined;
+          if (!composing.current) emitChange();
+        });
+      }}
       onBeforeInput={(event) => {
         const inputType = (event.nativeEvent as InputEvent).inputType;
         if (isEditorLineBreakInput(inputType)) event.preventDefault();
@@ -144,11 +167,13 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
         insertText(text);
       }}
       onCompositionStart={() => {
+        cancelInputSync();
         clearCompositionEndGuard();
         composing.current = true;
         onCompositionStart();
       }}
       onCompositionEnd={() => {
+        cancelInputSync();
         composing.current = false;
         compositionJustEnded.current = true;
         compositionGuardTimer.current = window.setTimeout(clearCompositionEndGuard, 100);
@@ -157,8 +182,11 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
         onCompositionEnd(next.value, next.mentions, next.caret);
       }}
       onBlur={() => {
+        const shouldSync = inputSyncFrame.current !== undefined || composing.current;
+        cancelInputSync();
         composing.current = false;
         clearCompositionEndGuard();
+        if (shouldSync) emitChange();
         onBlur();
       }}
       {...aria}
