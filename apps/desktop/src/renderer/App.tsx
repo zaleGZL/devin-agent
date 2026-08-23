@@ -764,15 +764,20 @@ export default function App() {
 
   useEffect(() => {
     if (!workspace) return;
-    // Keep the toolbar badge current even while the Changes inspector is closed.
+    // Keep the toolbar branch and badge current even while the Changes inspector is closed.
     // Identical snapshots are discarded by sameWorkspaceChanges, so polling does
     // not repaint the inspector or interrupt an in-flight diff request.
-    void refreshWorkspaceChanges({ background: true });
+    const refreshInBackground = () => void refreshWorkspaceChanges({ background: true });
+    refreshInBackground();
     const timer = window.setInterval(
-      () => void refreshWorkspaceChanges({ background: true }),
+      refreshInBackground,
       WORKSPACE_CHANGES_POLL_INTERVAL_MS,
     );
-    return () => window.clearInterval(timer);
+    window.addEventListener("focus", refreshInBackground);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshInBackground);
+    };
   }, [refreshWorkspaceChanges, workspace]);
 
   const startAgent = useCallback(async (
@@ -2657,12 +2662,12 @@ export default function App() {
                 {workspace && <button
                   className={`changes-toolbar-button${inspectorOpen && inspectorMode === "changes" ? " selected" : ""}`}
                   onClick={() => inspectorOpen && inspectorMode === "changes" ? closePreviewPanel() : showChangesPanel()}
-                  aria-label={t("changes.title")}
+                  aria-label={workspaceChanges?.branch ? t("changes.branchTitle", { branch: workspaceChanges.branch }) : t("changes.title")}
                   aria-pressed={inspectorOpen && inspectorMode === "changes"}
-                  title={t("changes.title")}
+                  title={workspaceChanges?.branch ? t("changes.branchTitle", { branch: workspaceChanges.branch }) : t("changes.title")}
                 >
                   <GitCompareArrows size={15} />
-                  <span>{t("changes.title")}</span>
+                  <span className="changes-toolbar-branch">{workspaceChanges?.branch ?? t("changes.title")}</span>
                   {workspaceChanges && workspaceChanges.changes.length > 0 && <small>{workspaceChanges.changes.length}</small>}
                 </button>}
                 {!inspectorOpen && workspace && <button

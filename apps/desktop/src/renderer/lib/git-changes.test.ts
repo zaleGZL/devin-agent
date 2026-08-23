@@ -27,6 +27,13 @@ describe("sameWorkspaceChanges", () => {
     expect(sameWorkspaceChanges(snapshot("2026-08-22T01:00:00Z"), snapshot("2026-08-22T01:00:03Z", "D"))).toBe(false);
   });
 
+  it("detects a branch switch for the toolbar label", () => {
+    const next = snapshot("2026-08-22T01:00:03Z");
+    next.branch = "feature/current-branch";
+
+    expect(sameWorkspaceChanges(snapshot("2026-08-22T01:00:00Z"), next)).toBe(false);
+  });
+
   it("detects a changed file count for the toolbar badge", () => {
     const next = snapshot("2026-08-22T01:00:03Z");
     next.changes.push({

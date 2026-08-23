@@ -39,10 +39,12 @@ describe("parsePorcelainStatus", () => {
       await fsp.writeFile(path.join(repository, "example.ts"), "export const value = 1;\n");
       await execFileAsync("git", ["add", "example.ts"], { cwd: repository });
       await execFileAsync("git", ["commit", "-qm", "initial"], { cwd: repository });
+      await execFileAsync("git", ["switch", "-qc", "feature/current-branch"], { cwd: repository });
       await fsp.writeFile(path.join(repository, "example.ts"), "export const value = 2;\n");
 
       const snapshot = await listWorkspaceChanges(repository);
       expect(snapshot.isRepository).toBe(true);
+      expect(snapshot.branch).toBe("feature/current-branch");
       expect(snapshot.changes).toEqual([expect.objectContaining({ path: "example.ts", kind: "modified" })]);
 
       const diff = await readWorkspaceDiff(repository, "example.ts");
