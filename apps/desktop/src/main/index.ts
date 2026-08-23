@@ -489,6 +489,8 @@ function registerIpc(): void {
   ipcMain.handle("settings:set-pinned-model-ids", (_event, value: unknown) => appSettings.setPinnedModelIds(expectModelIds(value)));
   ipcMain.handle("settings:get-new-session-model-id", () => appSettings.getNewSessionModelId());
   ipcMain.handle("settings:set-new-session-model-id", (_event, value: unknown) => appSettings.setNewSessionModelId(expectString(value, "new session model id", 200)));
+  ipcMain.handle("settings:get-preferred-mode-id", () => appSettings.getPreferredModeId());
+  ipcMain.handle("settings:set-preferred-mode-id", (_event, value: unknown) => appSettings.setPreferredModeId(expectString(value, "preferred mode id", 200)));
   ipcMain.handle("settings:get-devin-cli-path", () => appSettings.getDevinCliPath());
   ipcMain.handle("settings:set-devin-cli-path", async (_event, value: unknown) => {
     const cliPath = value === null ? null : expectString(value, "Devin CLI path", 4_096);

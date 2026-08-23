@@ -7,6 +7,7 @@ const generalTasksWorkspace = "/Users/demo/Library/Application Support/Devin Age
 const previewNow = new Date().toISOString();
 let pinnedModelIds: string[] = [];
 let newSessionModelId: string | null = null;
+let preferredModeId: string | null = null;
 
 function previewSession(id: string, title: string, ageMs: number, messageCount: number, cwd = workspace) {
   const sessionPath = `preview-session-${id}`;
@@ -46,6 +47,8 @@ export function createPreviewApi(): DesktopApi {
       setPinnedModelIds: async (modelIds) => { pinnedModelIds = [...modelIds]; },
       getNewSessionModelId: async () => newSessionModelId,
       setNewSessionModelId: async (modelId) => { newSessionModelId = modelId; },
+      getPreferredModeId: async () => preferredModeId,
+      setPreferredModeId: async (modeId) => { preferredModeId = modeId; },
       getDevinCliPath: async () => "/Users/demo/.local/bin/devin",
       setDevinCliPath: async (binaryPath) => ({ id: "devin", name: "Devin CLI", configured: true, source: "external-cli", defaultModel: "", version: "3000.4.25", binaryPath: binaryPath ?? "/Users/demo/.local/bin/devin", authenticated: "unknown" }),
       chooseDevinCliPath: async () => ({ id: "devin", name: "Devin CLI", configured: true, source: "external-cli", defaultModel: "", version: "3000.4.25", binaryPath: "/Users/demo/.local/bin/devin", authenticated: "unknown" }),

@@ -121,6 +121,7 @@ import { applyColorScheme } from "./lib/color-scheme";
 import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
+import { isImeCompositionKey } from "./lib/ime";
 import {
   formatMarkdownPlanRevisionPrompt,
   formatPlanRevisionPrompt,
@@ -135,6 +136,7 @@ import { normalizeAcpUpdate } from "./lib/acp-normalizer";
 import { supportsImagePrompt } from "./lib/capabilities";
 import { organizeModels, resolveNewSessionModelId, togglePinnedModelId } from "./lib/model-picker";
 import { getModePresentation, type ModeKind } from "./lib/mode-presentation";
+import { resolvePreferredModeId } from "./lib/mode-selection";
 import {
   findAtTrigger,
   insertMentionAtTrigger,
@@ -370,6 +372,7 @@ export default function App() {
   const modelRef = useRef("");
   const availableModelsRef = useRef<AgentSnapshot["models"]>([]);
   const newSessionModelIdRef = useRef<string | null>(null);
+  const preferredModeIdRef = useRef<PermissionMode | null>(null);
   const sessionMessagesRef = useRef(new Map<string, ChatMessage[]>());
   const sessionCommandsRef = useRef(new Map<string, AvailableCommand[]>());
   const runningSessionIdsRef = useRef(new Set<string>());
@@ -626,6 +629,31 @@ export default function App() {
     if (typeof snapshot.state.modeId === "string") setPermission(snapshot.state.modeId);
   }, []);
 
+  const applyPreferredModeToSnapshot = useCallback(async (
+    snapshot: AgentSnapshot,
+    preferredModeId: PermissionMode | null = preferredModeIdRef.current,
+  ): Promise<AgentSnapshot> => {
+    const modes = snapshot.modes ?? [];
+    const currentModeId = typeof snapshot.state.modeId === "string" ? snapshot.state.modeId : undefined;
+    const resolvedModeId = resolvePreferredModeId(preferredModeId, modes, currentModeId);
+    if (
+      snapshot.locked === true
+      || !snapshot.sessionId
+      || !resolvedModeId
+      || resolvedModeId === currentModeId
+      || !modes.some((mode) => mode.id === resolvedModeId)
+    ) return snapshot;
+    try {
+      await window.devinAgent.agent.command("set_mode", { sessionId: snapshot.sessionId, modeId: resolvedModeId });
+      return { ...snapshot, state: { ...snapshot.state, modeId: resolvedModeId } };
+    } catch (error) {
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+      return snapshot;
+    }
+  }, []);
+
   const refreshSessions = useCallback(async () => {
     const items = await window.devinAgent.sessions.list();
     setSessions(items);
@@ -822,10 +850,14 @@ export default function App() {
         ...(sessionPath ? { sessionPath } : {}),
         ...(sessionPath && behavior?.replaySession ? { replaySession: true } : {}),
       });
-      const nextSessionId = snapshot.sessionId ?? sessionPath;
+      const resolvedSnapshot = await applyPreferredModeToSnapshot(
+        snapshot,
+        overrides?.permission ?? preferredModeIdRef.current,
+      );
+      const nextSessionId = resolvedSnapshot.sessionId ?? sessionPath;
       selectActiveSession(nextSessionId);
-      hydrateSnapshot(snapshot);
-      markSessionRunning(nextSessionId, Boolean(snapshot.state.isStreaming));
+      hydrateSnapshot(resolvedSnapshot);
+      markSessionRunning(nextSessionId, Boolean(resolvedSnapshot.state.isStreaming));
       await refreshSessions();
       return nextSessionId;
     } catch (error) {
@@ -838,7 +870,7 @@ export default function App() {
     } finally {
       if (!background) setLoading(false);
     }
-  }, [hydrateSnapshot, markSessionRunning, permission, provider, providers, refreshSessions, sandbox, selectActiveSession, t]);
+  }, [applyPreferredModeToSnapshot, hydrateSnapshot, markSessionRunning, permission, provider, providers, refreshSessions, sandbox, selectActiveSession, t]);
 
   const discoverNewTaskCapabilities = useCallback((
     cwd: string,
@@ -859,12 +891,14 @@ export default function App() {
     hydrateSnapshot(snapshot);
     const stateModel = snapshot.state.model as { id?: string } | undefined;
     setModel(resolveNewSessionModelId(preferredModelId, snapshot.models, stateModel?.id));
+    const stateModeId = typeof snapshot.state.modeId === "string" ? snapshot.state.modeId : undefined;
+    setPermission(resolvePreferredModeId(preferredModeIdRef.current, snapshot.modes ?? [], stateModeId));
   }, [hydrateSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, storedColorScheme, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, storedNewSessionModelId, homeDirectory] = await Promise.all([
+      const [recentItems, allSessions, providerItems, storedColorScheme, storedProfile, storedShowReasoningProcess, storedPinnedModelIds, storedNewSessionModelId, storedPreferredModeId, homeDirectory] = await Promise.all([
         window.devinAgent.workspace.recent(),
         window.devinAgent.sessions.list(),
         window.devinAgent.auth.status(),
@@ -873,6 +907,7 @@ export default function App() {
         window.devinAgent.settings.getShowReasoningProcess(),
         window.devinAgent.settings.getPinnedModelIds(),
         window.devinAgent.settings.getNewSessionModelId(),
+        window.devinAgent.settings.getPreferredModeId(),
         window.devinAgent.app.homeDirectory(),
       ]);
       if (cancelled) return;
@@ -884,6 +919,7 @@ export default function App() {
       setShowReasoningProcess(storedShowReasoningProcess);
       setPinnedModelIds(storedPinnedModelIds);
       newSessionModelIdRef.current = storedNewSessionModelId;
+      preferredModeIdRef.current = storedPreferredModeId;
       applyColorScheme(storedColorScheme);
       const configured = providerItems.find((item) => item.id === "devin" && item.configured)
         ?? providerItems.find((item) => item.configured);
@@ -921,7 +957,8 @@ export default function App() {
             permission: "runtime",
             sandbox: "cli-managed",
           });
-          if (!cancelled) hydrateSnapshot(snapshot);
+          const resolvedSnapshot = await applyPreferredModeToSnapshot(snapshot, storedPreferredModeId);
+          if (!cancelled) hydrateSnapshot(resolvedSnapshot);
         } catch (error) {
           if (!cancelled && !isAgentSessionClosedError(error)) {
             setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
@@ -947,7 +984,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [discoverNewTaskCapabilities, hydrateNewTaskCapabilities, hydrateSnapshot, selectActiveSession]);
+  }, [applyPreferredModeToSnapshot, discoverNewTaskCapabilities, hydrateNewTaskCapabilities, hydrateSnapshot, selectActiveSession]);
 
   useEffect(() => {
     const offEvent = window.devinAgent.agent.onEvent((event) => {
@@ -1861,7 +1898,8 @@ export default function App() {
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (mentionMenu && !event.nativeEvent.isComposing) {
+    if (isImeCompositionKey(event.nativeEvent, composingRef.current)) return;
+    if (mentionMenu) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
@@ -1901,12 +1939,12 @@ export default function App() {
       window.requestAnimationFrame(() => textareaRef.current?.setCaret(next.caret));
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void sendMessage({ interrupt: event.metaKey || event.ctrlKey });
       return;
     }
-    if (event.key === "Enter" && event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && event.shiftKey) {
       event.preventDefault();
       textareaRef.current?.insertText("\n");
     }
@@ -1976,18 +2014,32 @@ export default function App() {
   };
 
   const changePermission = async (next: PermissionMode) => {
-    if (next === permission || permissionUpdating) return;
-    if (!activeSessionRef.current) {
-      setPermission(next);
-      return;
-    }
+    if ((next === permission && next === preferredModeIdRef.current) || permissionUpdating) return;
     const previous = permission;
+    const previousPreferredModeId = preferredModeIdRef.current;
+    const shouldUpdateRuntime = Boolean(activeSessionRef.current && next !== previous);
+    let runtimeChanged = false;
     setPermission(next);
     setPermissionUpdating(true);
     try {
-      await window.devinAgent.agent.command("set_mode", { modeId: next });
+      if (shouldUpdateRuntime) {
+        await window.devinAgent.agent.command("set_mode", { modeId: next });
+        runtimeChanged = true;
+      }
+      await window.devinAgent.settings.setPreferredModeId(next);
+      preferredModeIdRef.current = next;
     } catch (error) {
-      setPermission(previous);
+      let restoredRuntime = !runtimeChanged;
+      if (runtimeChanged && previous && availableModes.some((mode) => mode.id === previous)) {
+        try {
+          await window.devinAgent.agent.command("set_mode", { modeId: previous });
+          restoredRuntime = true;
+        } catch {
+          restoredRuntime = false;
+        }
+      }
+      preferredModeIdRef.current = previousPreferredModeId;
+      setPermission(restoredRuntime ? previous : next);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     } finally {
       setPermissionUpdating(false);
