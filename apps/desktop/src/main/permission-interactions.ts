@@ -25,16 +25,21 @@ export function editableCommandFromPermission(request: JsonObject): { command: s
 export function permissionDecisionFromInteraction(
   response: DesktopInteractionResponse,
   options: ReadonlyArray<{ id: string }>,
+  originalCommand?: string,
 ): PermissionDecision {
   if (response.action !== "select" || !options.some((option) => option.id === response.optionId)) {
     return { outcome: { outcome: "cancelled" } };
   }
   const updatedCommand = typeof response.updatedCommand === "string" ? response.updatedCommand.trim() : "";
+  const commandChanged = Boolean(updatedCommand) && updatedCommand !== originalCommand?.trim();
   return {
-    outcome: { outcome: "selected", optionId: response.optionId },
-    ...(updatedCommand && updatedCommand.length <= MAX_COMMAND_LENGTH
-      ? { _meta: { [UPDATED_INPUT_KEY]: updatedCommand } }
-      : {}),
+    outcome: {
+      outcome: "selected",
+      optionId: response.optionId,
+      ...(commandChanged && updatedCommand.length <= MAX_COMMAND_LENGTH
+        ? { _meta: { [UPDATED_INPUT_KEY]: { command: updatedCommand } } }
+        : {}),
+    },
   };
 }
 

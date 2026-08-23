@@ -51,6 +51,11 @@ Desktop MUST 在 Devin 返回修订后的最终命令时展示其完整内容，
 - **WHEN** 当前 permission 的有效 revision 返回一个最终候选命令
 - **THEN** Desktop SHALL 展示最终命令并保持未批准状态，直到用户选择允许或拒绝
 
+#### Scenario: 用户批准未再变化的最终命令
+
+- **WHEN** Devin 针对已更新的最终候选命令再次请求 permission，且用户未继续修改命令
+- **THEN** Desktop SHALL 只返回标准选择结果，不得重复附带相同的 `cognition.ai/updatedInput`
+
 #### Scenario: 用户拒绝最终命令
 
 - **WHEN** 用户查看修订后的最终命令并选择拒绝

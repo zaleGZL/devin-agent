@@ -83,8 +83,6 @@ export interface InitializeParams extends JsonObject {
 export interface DevinClientFeatureSupport {
   elicitationForm: boolean;
   elicitationUrl: boolean;
-  editableCommands: boolean;
-  commandRevision: boolean;
   chains: boolean;
 }
 
@@ -95,8 +93,6 @@ export interface DevinClientAdvertisement {
 export const DEVIN_DESKTOP_CLIENT_FEATURES: DevinClientFeatureSupport = {
   elicitationForm: true,
   elicitationUrl: true,
-  editableCommands: true,
-  commandRevision: true,
   chains: true,
 };
 
@@ -110,8 +106,6 @@ export function buildDevinClientAdvertisement(
     ...(resolved.elicitationUrl ? { url: {} } : {}),
   };
   const clientMeta = {
-    ...(resolved.editableCommands ? { "cognition.ai/editableCommands": true } : {}),
-    ...(resolved.commandRevision ? { "cognition.ai/commandRevision": true } : {}),
     ...(resolved.chains ? { "cognition.ai/chains": true } : {}),
   };
   return {

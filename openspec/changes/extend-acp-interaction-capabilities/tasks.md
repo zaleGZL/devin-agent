@@ -24,7 +24,7 @@
 - [x] 3.3 扩展 permission broker 与 IPC，保留 request/toolCall 身份、原始 options、revision 序号和最终候选命令，且不在 Desktop 执行任何命令
 - [x] 3.4 扩展审批 UI，按 Agent capability 分别显示直接编辑与“描述修改要求”，并在 Devin 返回最终命令后强制二次明确批准
 - [x] 3.5 添加审批契约测试，覆盖能力缺失、标准 option 兼容、编辑往返、revision 往返、拒绝最终命令、旧 revision 迟到和连接重建
-- [x] 3.6 在完整往返闭环与 fixture 测试通过前保持编辑相关客户端声明及 UI 入口关闭
+- [x] 3.6 不把 Agent 侧 `editableCommands`/`commandRevision` 误广告为客户端能力，并在完整往返闭环与 fixture 测试通过前保持对应 UI 入口关闭
 
 ## 4. `/btw` chain side-chat
 
@@ -50,3 +50,11 @@
 - [x] 6.3 运行相关 Vitest 测试、`pnpm test` 和 `pnpm check`，修复 typecheck、lint、test 与 build 回归
 - [x] 6.4 若变更触及依赖、imports 或路径，运行 `pnpm check:independence` 并确认没有 DSCode 引用
 - [x] 6.5 在每个代码提交前提升 `apps/desktop/package.json` 的 patch 版本，并将版本变更纳入同一提交
+
+## 7. 本地 App 端到端验收
+
+- [x] 7.1 在端口 `5173` 已被占用时启动真实 App，并确认 Electron 使用 Vite 实际分配的端口而不是打开其他服务
+- [x] 7.2 使用已登录 Devin CLI 验证 `ask_user_question` 单选表单可提交并返回所选值
+- [x] 7.3 验证原生 rename 在 UI 与 session index 中同步，标题来源记录为 `native`
+- [x] 7.4 在主 permission 挂起时验证 `/btw` 独立返回，且主审批保持待处理
+- [x] 7.5 验证可编辑审批的两阶段协议：首次回传 `outcome._meta.updatedInput`，最终未变化审批不重复回传，实际只执行编辑后的命令

@@ -30,7 +30,7 @@ Desktop SHALL 仅在当前 Agent 广告 `chains` 且当前 session 的动态命�
 
 ### Requirement: side-chat 与主任务并行且互不取消
 
-Desktop SHALL 通过 Agent 动态广告的 `/btw` 命令发起 side-chat，不取消、暂停或替换正在运行的主 prompt。
+Desktop SHALL 通过 Agent 动态广告的 `/btw` 命令发起 side-chat，并同时发送已协商的 `cognition.ai/chain: "side"` 元数据，不取消、暂停或替换正在运行的主 prompt。
 
 #### Scenario: 主任务运行时发送 side question
 

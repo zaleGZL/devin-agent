@@ -60,13 +60,15 @@ Host 保留 permission request 的原始 options、tool call 内容和 Devin ven
 
 编辑或 revision 只生成对当前 permission 的候选变更并回传给 Devin；Desktop 不运行、解析执行或代替 Devin 修改命令。Devin 返回修订后的最终命令后，UI 必须再次显示完整命令并要求显式批准，不能沿用第一次意图自动放行。broker 用原始 request/toolCall 身份和 revision 序号拒绝迟到或过期结果。
 
-由于 vendor payload 不是标准 ACP schema，实施时先用已安装 Devin CLI 捕获并固化请求、revision 和最终复核的脱敏 fixture；类型守卫只接受 fixture 证实的字段。在该往返闭环测试通过前，初始化不能声明对应客户端扩展，UI 也不能显示入口。
+编辑响应把 `cognition.ai/updatedInput: {command}` 放在 permission `outcome._meta`，而不是响应顶层 `_meta`。Devin 收到变更后会用最终候选命令发起新的 permission request；第二次确认若命令未再变化，Desktop 只返回标准选择结果，不得重复附带相同 `updatedInput`，否则会形成重复审批循环。
+
+由于 vendor payload 不是标准 ACP schema，实施时先用已安装 Devin CLI 捕获并固化请求、revision 和最终复核的脱敏 fixture；类型守卫只接受 fixture 证实的字段。`editableCommands` 与 `commandRevision` 不作为客户端扩展声明；在往返闭环测试通过前，UI 也不能显示入口。
 
 ### 6. `/btw` 通过动态命令调用，chain 状态与主对话隔离
 
 完成 chain-aware normalizer、状态容器和 UI 后，客户端在 `clientCapabilities._meta` 声明 `cognition.ai/chains: true`。实测放在 initialize 顶层 `_meta` 不会启用 `/btw`。renderer 只有同时看到 Agent `chains` capability 和当前 session 动态命令列表中的 `/btw` 时才显示入口，并使用该命令的运行时名称、描述与 input hint 发起调用。
 
-当前 Devin CLI 3000.5.20 使用 `session/prompt` 顶层 `_meta: {"cognition.ai/chain":"side"}` 发起并行请求，响应通知在 envelope `_meta` 回传相同标记；发送字面 `/btw` 不会创建 side-chain。因此 Host 只封装这一经 fixture 验证的参数，不在 renderer 暴露通用 vendor RPC。
+当前 Devin CLI 3000.5.20 要求 `session/prompt` 同时包含字面 `/btw <question>` 和顶层 `_meta: {"cognition.ai/chain":"side"}` 才能在主 permission 挂起时稳定创建独立 side-chain；仅使用普通问题加 chain 元数据会继承主链上下文，仅发送字面 `/btw` 则会被 CLI 以客户端不支持 chains 拒绝。响应通知在 envelope `_meta` 回传相同标记。Host 只封装这一经实机验证的组合参数，不在 renderer 暴露通用 vendor RPC。
 
 conversation 状态按 `sessionId + chainId` 分区。带已知 chain 元数据的消息、tool call、状态和错误进入对应 side-chat；无 chain 元数据的事件继续进入主对话。side-chat 有独立的 streaming、stop reason、错误和关闭状态，关闭面板不取消主 prompt，side-chat 失败也不改变主任务状态。未知 chain 的事件保留脱敏诊断，不合并进主消息。
 
@@ -78,7 +80,7 @@ conversation 状态按 `sessionId + chainId` 分区。带已知 chain 元数据�
 
 ### 8. 测试以协议 fixture 和纯状态变换为主
 
-Transport/Host 使用 mock ACP peer 验证 method 注册、响应形状、generation、取消和 capability 门控；renderer 使用纯 reducer/normalizer 测试 form 校验、approval revision、chain 隔离与 rename 回滚。使用脱敏 live fixture 补足 Devin vendor extension 的真实 wire shape，但测试运行不依赖已登录 Devin、真实 MCP、系统浏览器或 shell 执行。
+Transport/Host 使用 mock ACP peer 验证 method 注册、响应形状、generation、取消和 capability 门控；renderer 使用纯 reducer/normalizer 测试 form 校验、approval revision、chain 隔离与 rename 回滚。使用脱敏 live fixture 补足 Devin vendor extension 的真实 wire shape，但默认测试运行不依赖已登录 Devin、真实 MCP、系统浏览器或 shell 执行。发布前另以本地 App 和已登录 Devin CLI 做显式端到端验收，覆盖结构化提问、主审批挂起时的 `/btw`、两阶段可编辑审批和原生 rename。
 
 ## 风险与权衡
 
@@ -95,11 +97,11 @@ Transport/Host 使用 mock ACP peer 验证 method 注册、响应形状、genera
 3. 完成 editable approval 的真实 fixture、往返 handler 和最终复核后，再开放 Agent capability-gated 入口。
 4. 完成 chain normalizer、状态与 side-chat UI 后，才声明 `cognition.ai/chains`；验证 `/btw` 确由动态命令列表出现。
 5. 最后接入原生 rename；保留本地 overlay 数据，不做破坏性迁移。
-6. 若发布后发生协议不兼容，可分别关闭 elicitation、chains 或 vendor approval 的客户端声明；未协商能力继续 fail-closed。
+6. 若发布后发生协议不兼容，可分别关闭 elicitation/chains 的客户端声明或 Agent capability-gated 的 vendor approval UI；未协商能力继续 fail-closed。
 
 ## 实施阶段确认的协议事实
 
-- Devin CLI 3000.5.20 的 permission `toolCall._meta["cognition.ai/editableCommand"]` 是完整命令字符串；编辑后的 permission response 使用 `_meta["cognition.ai/updatedInput"]` 回传候选命令。
+- Devin CLI 3000.5.20 的 permission `toolCall._meta["cognition.ai/editableCommand"]` 是完整命令字符串；编辑后的 permission response 使用 `outcome._meta["cognition.ai/updatedInput"] = {command}` 回传候选命令，并通过新的 permission request 要求最终确认。未变化的最终命令不得重复携带 `updatedInput`。
 - 自然语言修订调用 `_cognition.ai/command/revise`，参数为 `{sessionId, command, note}`，成功响应为 `{command}`；Desktop 的 revision 序号仅用于拒绝本地迟到响应，不进入 vendor RPC。
-- chain 声明位于 `clientCapabilities._meta`，side prompt 与通知使用 `cognition.ai/chain: "side"`。未知值只进入脱敏诊断。
+- chain 声明位于 `clientCapabilities._meta`；side prompt 同时使用字面 `/btw` 与 `cognition.ai/chain: "side"`，通知使用相同 chain 标记。未知值只进入脱敏诊断。
 - `_cognition.ai/session/rename` 参数为 `{sessionId,title}`；若成功响应未返回规范化 title，则以用户提交值作为成功后的本地镜像，但仍以 RPC 成功作为提交点。

@@ -339,7 +339,7 @@ async function createRuntimeHost(): Promise<RuntimeHost | undefined> {
           ...(commandRevision ? { commandRevision } : {}),
           raw: requestRecord,
         });
-        return permissionDecisionFromInteraction(response, options);
+        return permissionDecisionFromInteraction(response, options, editableCommand?.command);
       },
       onElicitationRequest: async (request: unknown, context: { generation: number; rpcRequestId: string | number | null }) => {
         const record = request && typeof request === "object" ? request as Record<string, unknown> : {};

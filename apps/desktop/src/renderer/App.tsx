@@ -4924,7 +4924,13 @@ function DesktopInteractionCard({
                 <button
                   key={option.id}
                   disabled={Boolean(busy)}
-                  onClick={() => void respond({ action: "select", optionId: option.id, ...(request.editableCommand ? { updatedCommand: command } : {}) }, `select:${option.id}`)}
+                  onClick={() => void respond({
+                    action: "select",
+                    optionId: option.id,
+                    ...(request.editableCommand && command.trim() !== request.editableCommand.command.trim()
+                      ? { updatedCommand: command }
+                      : {}),
+                  }, `select:${option.id}`)}
                 >
                   <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
                   {busy === `select:${option.id}` ? <LoaderCircle className="spin" size={14} /> : <ChevronRight size={14} />}

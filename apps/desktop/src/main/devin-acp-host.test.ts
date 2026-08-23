@@ -101,8 +101,6 @@ describe("DevinAcpHost contract", () => {
       clientCapabilities: {
         elicitation: { form: {}, url: {} },
         _meta: {
-          "cognition.ai/editableCommands": true,
-          "cognition.ai/commandRevision": true,
           "cognition.ai/chains": true,
         },
       },
@@ -151,7 +149,7 @@ describe("DevinAcpHost contract", () => {
     await expect(host.reviseCommand({ command: "touch original.txt", instruction: "change the filename" })).resolves.toEqual({ command: "touch revised.txt" });
     await expect(host.renameSession("new-session", "Native title")).resolves.toEqual({ title: "Native title" });
     expect(transports[0]?.requests.find((request) => request.method === "session/prompt")?.params).toMatchObject({
-      prompt: [{ type: "text", text: "quick question" }],
+      prompt: [{ type: "text", text: "/btw quick question" }],
       _meta: { "cognition.ai/chain": "side" },
     });
     expect(transports[0]?.requests.find((request) => request.method === "_cognition.ai/command/revise")?.params).toMatchObject({ command: "touch original.txt", note: "change the filename" });

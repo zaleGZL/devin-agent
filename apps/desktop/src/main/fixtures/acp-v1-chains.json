@@ -21,7 +21,7 @@
     "prompt": [
       {
         "type": "text",
-        "text": "[SAFE_SIDE_QUESTION]"
+        "text": "/btw [SAFE_SIDE_QUESTION]"
       }
     ],
     "_meta": {

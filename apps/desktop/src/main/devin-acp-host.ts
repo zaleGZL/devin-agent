@@ -552,7 +552,7 @@ export class DevinAcpHost {
       "session/prompt",
       {
         sessionId,
-        prompt: [{ type: "text", text: normalized }],
+        prompt: [{ type: "text", text: `/btw ${normalized}` }],
         _meta: { "cognition.ai/chain": "side" },
       },
       { timeoutMs: 0 },
