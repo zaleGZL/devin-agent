@@ -64,6 +64,9 @@ pnpm dev
 
 ## 开发
 
+贡献者规范统一索引在[仓库知识库](docs/README.md)。先从 `AGENTS.md` 开始，再按当前改动只读取
+相关的产品、架构、安全、质量或开发流程文档。
+
 ```bash
 pnpm check              # typecheck + lint + test + build
 pnpm check:independence # 确保无禁止的 DSCode 引用

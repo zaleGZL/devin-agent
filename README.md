@@ -67,6 +67,10 @@ to the Devin CLI binary. The app runs `devin --version` to verify, then connects
 
 ## Development
 
+Contributor guidance is indexed in the [repository knowledge base](docs/README.md). Start from
+`AGENTS.md`, then read only the product, architecture, security, quality, or workflow document relevant
+to the change.
+
 ```bash
 pnpm check              # typecheck + lint + test + build
 pnpm check:independence # ensure no forbidden DSCode references

@@ -1,107 +1,79 @@
 # AGENTS.md
 
-Devin Coding Agent — a desktop-only local coding agent.
-The sole agent runtime is the user's locally installed Devin CLI, connected via the ACP protocol.
-This file is a navigation map for the repository, not an encyclopedia. Drill down on demand; do not read every link up front.
+Devin Coding Agent is a desktop-only client for the user's locally installed Devin CLI.
+Devin CLI is the sole agent runtime and is connected through ACP; the desktop is a secure
+transport and presentation shell.
+
+This file is a map, not a manual. Read only the documents relevant to the current change,
+then use code, tests, and generated configuration as the executable source of truth.
+
+## Start here
+
+| When working on | Read first |
+| --- | --- |
+| Product behavior or scope | [README.md](README.md), [docs/product.md](docs/product.md) |
+| Process boundaries, IPC, state ownership | [docs/architecture.md](docs/architecture.md) |
+| Implementation, tests, branches, releases | [docs/development.md](docs/development.md) |
+| Credentials, filesystem, URLs, sandboxing | [docs/security.md](docs/security.md) |
+| Acceptance criteria and known quality gaps | [docs/quality.md](docs/quality.md) |
+| ACP or Devin CLI behavior | [docs/devin-cli.md](docs/devin-cli.md), then the routed mirror page |
+| A non-trivial product or architecture change | the active Simplified Chinese artifact under `openspec/changes/` |
+| Why a repository rule exists | [docs/research/](docs/research/) for evidence; research is not normative |
+
+The full knowledge map and documentation maintenance contract are in
+[docs/README.md](docs/README.md).
 
 ## Quick commands
 
 ```bash
 pnpm install              # install dependencies
-pnpm dev                  # start dev (Vite + Electron)
+pnpm dev                  # start Vite + Electron
 pnpm check                # typecheck + lint + test + build
-pnpm check:independence   # ensure no DSCode checkout references
-pnpm docs:sync:devin-cli  # sync the Devin CLI docs mirror from docs.devin.ai/llms.txt
-pnpm pack                 # local pack (unsigned)
-pnpm pack:mac             # unsigned Apple Silicon DMG → Downloads, then open Finder
-pnpm publish:desktop      # read version from apps/desktop/package.json → tag → push → CI publishes Release
+pnpm check:independence   # reject DSCode dependencies, paths, env vars, and symlinks
+pnpm docs:sync:devin-cli  # refresh the generated Devin CLI documentation mirror
+pnpm pack                 # local unsigned package
+pnpm pack:mac             # unsigned Apple Silicon DMG -> Downloads
+pnpm publish:desktop      # tag the package version and trigger the release workflow
 ```
 
-Real ACP smoke test (requires an authenticated Devin CLI):
+Authenticated integration smoke test; do not run it by default in CI:
 
 ```bash
 DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
 ```
 
-## Branching workflow
+## Non-negotiable invariants
 
-- The default development branch is `dev`. Do all day-to-day work on `dev`.
-- When a piece of work is complete, open a Merge Request (MR) from `dev` to `main`.
-- After the MR is merged into `main`, sync the latest `main` back into `dev`
-  (e.g. `git checkout dev && git merge main` or `git pull origin main`) so `dev`
-  stays up to date before starting the next change.
-- Do not commit directly to `main`; route changes through `dev` → MR → `main`.
+1. **No second executor.** Prompts, tools, terminals, permissions, sandboxing, MCP, Skills,
+   Rules, Hooks, and Plugins execute in Devin CLI. Desktop sends requests and renders results.
+2. **No fabricated capabilities.** Models, modes, commands, session operations, image/audio
+   support, and extensions come from ACP initialize/session responses. Unadvertised behavior is
+   neither called nor shown.
+3. **No Devin credential access.** Authentication uses only ACP-advertised methods and the
+   system browser. The desktop does not read, copy, or persist Devin credentials.
+4. **No Devin binary distribution.** Discovery validates a user-installed binary; updates
+   delegate to `devin update`. Installers never bundle or self-download Devin CLI.
+5. **Sandbox fails closed.** If isolation is requested but unavailable, execution must stop
+   instead of silently running without isolation.
+6. **Electron boundaries stay narrow.** Renderer has no Node access. Native capabilities live
+   in main and are exposed only through the validated, typed preload IPC surface.
+7. **No DSCode coupling.** Never add DSCode imports, checkout paths, runtime packages,
+   `DSCODE_*` environment variables, or build-input symlinks.
+8. **Protocol changes start from evidence.** Before changing `acp-types.ts`, `acp-transport.ts`,
+   or ACP request handling, read `docs/devin-cli.md`, the relevant mirror pages, and SDK types.
+9. **Tests follow modules.** Add or update co-located Vitest tests for changed behavior. Prefer
+   mocks for ACP logic; use the live smoke test only when authenticated integration evidence is needed.
+10. **Every code commit bumps the desktop patch version.** Increment `x.y.Z` in
+    `apps/desktop/package.json` in the same commit. Documentation-only commits do not bump it.
 
-## Architecture map
+## Change contract
 
-```
-apps/desktop/src/
-  main/       Electron main process: owns Devin subprocess, filesystem, native capabilities
-  preload/    IPC bridge (validated; renderer has no Node access)
-  renderer/   React UI (App.tsx main view + lib/ modules + styles.css)
-  shared/     types and capability definitions shared between main and renderer
-```
-
-Key module entry points (paths relative to repo root):
-
-- `apps/desktop/src/main/devin-acp-host.ts` — ACP host logic; manages Devin subprocess lifecycle
-- `apps/desktop/src/main/acp-transport.ts` — ACP JSON-RPC transport layer
-- `apps/desktop/src/main/devin-discovery.ts` — discover and validate the local `devin` binary
-- `apps/desktop/src/main/devin-update.ts` — delegate to official `devin update`; never self-download
-- `apps/desktop/src/main/git-changes.ts` — workspace git status
-- `apps/desktop/src/renderer/App.tsx` — main UI (single file)
-- `apps/desktop/src/renderer/lib/acp-normalizer.ts` — ACP event normalization
-- `apps/desktop/src/renderer/lib/conversation.ts` — conversation state management
-- `apps/desktop/src/shared/acp-types.ts` — ACP protocol types
-- `apps/desktop/src/shared/capabilities.ts` — dynamic capability negotiation
-
-## Mandatory rules
-
-These rules always apply. Violating them causes CI failures or runtime errors.
-
-1. **No DSCode references.** If your change touches dependencies, imports, or paths, run `pnpm check:independence`.
-   No DSCode checkout paths or `DSCODE_*` env vars.
-
-2. **No fabricated ACP capabilities.** The UI must not use static constants in place of runtime negotiation.
-   models, modes, slash commands, session operations, image/audio support must all come from ACP initialize/session responses.
-   Capabilities not advertised are not called and not shown.
-
-3. **No second executor.** Agent prompt, tools, terminal, permission, sandbox,
-   MCP, Skills, Rules, Hooks, Plugins are all executed by Devin CLI.
-   Desktop only sends requests and displays results.
-
-4. **No reading or copying Devin credentials.** Auth is done only via ACP-advertised methods and the system browser.
-   Browser auth is not self-implemented.
-
-5. **No self-downloading Devin CLI binary.** Updates are delegated to the local `devin update`.
-   Install packages do not bundle Devin CLI binary.
-
-6. **Sandbox is fail-closed.** When sandbox is requested but the environment does not support it, never silently fall back to unisolated execution.
-
-7. **Read protocol types before changing ACP interaction.** Before editing `apps/desktop/src/shared/acp-types.ts` or `apps/desktop/src/main/acp-transport.ts`,
-   read the ACP-related doc index in `docs/devin-cli.md`.
-
-8. **Every code commit bumps the desktop patch version.** Before committing any code change, increment the final
-   `x.y.Z` component in `apps/desktop/package.json` and include that version bump in the same commit.
-   Never reuse or skip this patch-version update for a code commit.
-
-## Deeper docs
-
-Read on demand; you don't need to read all of these before starting work.
-
-- [README.md](README.md) — project overview, prerequisites, feature boundaries, platform limits
-- [docs/devin-cli.md](docs/devin-cli.md) — index to the local mirror of Devin CLI official docs (ACP, config, extensibility, enterprise, reference)
-- [.github/workflows/desktop.yml](.github/workflows/desktop.yml) — CI: verify → tri-platform packaging → tag-triggered Release
-
-## Testing conventions
-
-- Every module has a co-located `.test.ts` file, using Vitest.
-- If you change a module, run `pnpm test` to confirm its tests pass.
-- Prefer mock tests for ACP-related changes; use `smoke:devin` for real ACP smoke, do not run it by default in CI.
-
-## Release
-
-1. Bump `version` in `apps/desktop/package.json`.
-2. Commit.
-3. `pnpm publish:desktop` — automatically creates a `desktop-v<version>` tag and pushes it; CI runs and the installers appear on GitHub Releases.
-4. Artifacts are unsigned. macOS users must right-click → Open to bypass Gatekeeper; Windows will show a SmartScreen warning.
+- Work on `dev`; deliver through `dev` -> Merge Request -> `main`. Never commit directly to `main`.
+- Define observable acceptance criteria before implementation. For non-trivial work, keep the
+  OpenSpec proposal, design, tasks, and delta specs in Simplified Chinese and current with the code.
+- When behavior, architecture, workflow, security posture, or a durable decision changes, update
+  its canonical document in the same change. Do not leave the decision only in chat or review history.
+- Run the smallest relevant checks while iterating and the full required checks before handoff.
+  The validation matrix is in [docs/development.md](docs/development.md).
+- Turn repeated review feedback into a repository rule, test, or check. Prefer enforcing boundaries
+  and invariants mechanically while leaving implementation choices local.
