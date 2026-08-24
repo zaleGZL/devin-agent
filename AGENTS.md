@@ -10,7 +10,7 @@ This file is a navigation map for the repository, not an encyclopedia. Drill dow
 pnpm install              # install dependencies
 pnpm dev                  # start dev (Vite + Electron)
 pnpm check                # typecheck + lint + test + build
-pnpm check:independence   # ensure no DSCode checkout / @thinkany/dscode-* references
+pnpm check:independence   # ensure no DSCode checkout references
 pnpm docs:sync:devin-cli  # sync the Devin CLI docs mirror from docs.devin.ai/llms.txt
 pnpm pack                 # local pack (unsigned)
 pnpm pack:mac             # unsigned Apple Silicon DMG → Downloads, then open Finder
@@ -60,7 +60,7 @@ Key module entry points (paths relative to repo root):
 These rules always apply. Violating them causes CI failures or runtime errors.
 
 1. **No DSCode references.** If your change touches dependencies, imports, or paths, run `pnpm check:independence`.
-   No `@thinkany/dscode-*`, DSCode checkout paths, or `DSCODE_*` env vars.
+   No DSCode checkout paths or `DSCODE_*` env vars.
 
 2. **No fabricated ACP capabilities.** The UI must not use static constants in place of runtime negotiation.
    models, modes, slash commands, session operations, image/audio support must all come from ACP initialize/session responses.

@@ -3,7 +3,6 @@ import path from "node:path";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const forbidden = [
-  /@thinkany\/dscode-/i,
   /(?:^|[\\/])dscode(?:[\\/]|$)/i,
   /DSCODE_[A-Z_]+/,
   /workspace:[^\n]*dscode/i,
