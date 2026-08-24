@@ -43,6 +43,9 @@ installation instructions are included below.
 ### Composer `@` references
 
 Type `@` in the composer to reference **Files**, **Directories**, or **Skills**.
+The Skill picker discovers repository Skills from `.agents/skills` and `.codex/skills`, plus personal
+Skills from `~/.agents/skills` and `~/.codex/skills`. Duplicate invocation names are shown as conflicts
+and cannot be selected until one definition is renamed or removed.
 
 ## Prerequisites
 
@@ -66,6 +69,10 @@ If the app cannot find `devin` on your `PATH`, open **Settings** and select the 
 to the Devin CLI binary. The app runs `devin --version` to verify, then connects via `devin acp`.
 
 ## Development
+
+Contributor guidance is indexed in the [repository knowledge base](docs/README.md). Start from
+`AGENTS.md`, then read only the product, architecture, security, quality, or workflow document relevant
+to the change.
 
 ```bash
 pnpm check              # typecheck + lint + test + build

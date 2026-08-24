@@ -40,6 +40,8 @@ macOS 安装方法见下文。
 ### 输入框 `@` 引用
 
 在输入框键入 `@` 可引用**文件**、**目录**或 **Skills**。
+Skill 选择器会发现仓库中的 `.agents/skills`、`.codex/skills`，以及用户目录中的
+`~/.agents/skills`、`~/.codex/skills`。同名调用会显示为冲突；重命名或移除其中一份定义前不可选择。
 
 ## 前置条件
 
@@ -63,6 +65,9 @@ pnpm dev
 应用会先运行 `devin --version` 验证，再通过 `devin acp` 建立连接。
 
 ## 开发
+
+贡献者规范统一索引在[仓库知识库](docs/README.md)。先从 `AGENTS.md` 开始，再按当前改动只读取
+相关的产品、架构、安全、质量或开发流程文档。
 
 ```bash
 pnpm check              # typecheck + lint + test + build
