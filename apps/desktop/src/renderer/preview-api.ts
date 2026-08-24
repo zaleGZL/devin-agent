@@ -91,6 +91,11 @@ export function createPreviewApi(): DesktopApi {
         ].find((candidate) => candidate.path === projectPath);
         return item ? [item] : [];
       }),
+      rename: async (projectPath, name) => [
+        { path: workspace, name: projectPath === workspace ? name : "devin-agent", lastOpenedAt: new Date().toISOString() },
+        { path: docsWorkspace, name: projectPath === docsWorkspace ? name : "developer-docs", lastOpenedAt: new Date(Date.now() - 3_600_000).toISOString() },
+        { path: terminalWorkspace, name: projectPath === terminalWorkspace ? name : "termany", lastOpenedAt: new Date(Date.now() - 7_200_000).toISOString() },
+      ],
     },
     files: {
       validPreviewPaths: async (paths) => paths,

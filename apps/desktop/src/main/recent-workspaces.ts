@@ -54,6 +54,19 @@ export class RecentWorkspaces {
     return next;
   }
 
+  async rename(workspacePath: string, name: string): Promise<WorkspaceItem[]> {
+    const resolved = path.resolve(workspacePath);
+    const normalized = name.trim();
+    if (!normalized) throw new Error("Project name must not be empty");
+    if (normalized.length > 120) throw new Error("Project name must be 1–120 characters");
+    const current = await this.list();
+    const target = current.find((item) => item.path === resolved);
+    if (!target) throw new Error("Only known projects can be renamed");
+    const next = current.map((item) => (item.path === resolved ? { ...item, name: normalized } : item));
+    await this.write(next);
+    return next;
+  }
+
   private async write(items: WorkspaceItem[]): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await fs.writeFile(this.file, `${JSON.stringify(items, null, 2)}\n`, { mode: 0o600 });

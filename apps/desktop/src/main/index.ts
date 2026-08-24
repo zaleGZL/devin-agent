@@ -751,6 +751,9 @@ function registerIpc(): void {
   ipcMain.handle("workspace:recent", () => recentWorkspaces.list());
   ipcMain.handle("workspace:forget", (_event, value: unknown) => recentWorkspaces.forget(expectString(value, "workspace path", 4_096)));
   ipcMain.handle("workspace:reorder", (_event, value: unknown) => recentWorkspaces.reorder(expectStringList(value, "workspace paths", 12, 4_096)));
+  ipcMain.handle("workspace:rename", (_event, pathValue: unknown, nameValue: unknown) =>
+    recentWorkspaces.rename(expectString(pathValue, "workspace path", 4_096), expectString(nameValue, "workspace name", 120)),
+  );
   ipcMain.handle("workspace:open-in-devin", async (_event, value: unknown) => {
     const workspacePath = await resolveKnownWorkspace(value);
     await shell.openExternal(createDevinWorkspaceUrl(workspacePath));

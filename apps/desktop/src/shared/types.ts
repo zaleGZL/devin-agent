@@ -227,6 +227,7 @@ export interface DesktopApi {
     recent(): Promise<WorkspaceItem[]>;
     forget(path: string): Promise<WorkspaceItem[]>;
     reorder(paths: string[]): Promise<WorkspaceItem[]>;
+    rename(path: string, name: string): Promise<WorkspaceItem[]>;
     openInDevin(path: string): Promise<void>;
     changes(path: string): Promise<WorkspaceChanges>;
     diff(path: string, filePath: string): Promise<WorkspaceDiff>;

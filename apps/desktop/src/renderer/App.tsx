@@ -250,7 +250,7 @@ const PROJECT_TASK_PREVIEW_COUNT = 4;
 const SESSION_MENU_WIDTH = 176;
 const SESSION_MENU_HEIGHT = 160;
 const PROJECT_MENU_WIDTH = 176;
-const PROJECT_MENU_HEIGHT = 44;
+const PROJECT_MENU_HEIGHT = 88;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const DEVIN_GITHUB_URL = "https://github.com/zaleGZL/devin-agent";
 const DEVIN_GITHUB_DISPLAY_URL = "github.com/zaleGZL/devin-agent";
@@ -355,6 +355,8 @@ export default function App() {
   const [projectMenu, setProjectMenu] = useState<{ path: string; left: number; top: number }>();
   const [projectPendingRemoval, setProjectPendingRemoval] = useState<WorkspaceItem>();
   const [projectRemovalBusy, setProjectRemovalBusy] = useState(false);
+  const [renamingProjectPath, setRenamingProjectPath] = useState<string>();
+  const [projectRenameDraft, setProjectRenameDraft] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [sessionRenameDraft, setSessionRenameDraft] = useState("");
   const [sidebarDrag, setSidebarDrag] = useState<SidebarDragState>();
@@ -372,6 +374,7 @@ export default function App() {
   const annotationCommentInputRef = useRef<HTMLInputElement>(null);
   const annotationRangesRef = useRef(new Map<string, Range>());
   const sessionRenameInputRef = useRef<HTMLInputElement>(null);
+  const projectRenameInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followingConversationTailRef = useRef(true);
   const previousConversationScrollTopRef = useRef(0);
@@ -579,6 +582,12 @@ export default function App() {
     sessionRenameInputRef.current?.focus();
     sessionRenameInputRef.current?.select();
   }, [renamingSessionId]);
+
+  useEffect(() => {
+    if (!renamingProjectPath) return;
+    projectRenameInputRef.current?.focus();
+    projectRenameInputRef.current?.select();
+  }, [renamingProjectPath]);
 
   const setSessionUnread = useCallback((sessionId: string | undefined, unread: boolean) => {
     const current = unreadSessionIdsRef.current;
@@ -1543,6 +1552,37 @@ export default function App() {
   const requestProjectRemoval = (project: WorkspaceItem) => {
     setProjectMenu(undefined);
     setProjectPendingRemoval(project);
+  };
+
+  const beginProjectRename = (project: WorkspaceItem) => {
+    setProjectMenu(undefined);
+    setProjectRenameDraft(project.name);
+    setRenamingProjectPath(project.path);
+  };
+
+  const cancelProjectRename = () => {
+    setRenamingProjectPath(undefined);
+    setProjectRenameDraft("");
+  };
+
+  const commitProjectRename = async (project: WorkspaceItem) => {
+    const name = projectRenameDraft.trim();
+    if (!name || name === project.name) {
+      cancelProjectRename();
+      return;
+    }
+    const previous = project;
+    setRenamingProjectPath(undefined);
+    setProjectRenameDraft("");
+    setWorkspaces((current) => current.map((item) => item.path === project.path ? { ...item, name } : item));
+    try {
+      const renamed = await window.devinAgent.workspace.rename?.(project.path, name);
+      if (!renamed) throw new Error(t("sidebar.renameProjectFailed"));
+      setWorkspaces(renamed);
+    } catch (error) {
+      setWorkspaces((current) => current.map((item) => item.path === project.path ? { ...item, name: previous.name } : item));
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
   };
 
   const removeProject = async () => {
@@ -2587,8 +2627,8 @@ export default function App() {
                     <button
                       type="button"
                       className="sidebar-drag-handle project-drag-handle"
-                      draggable={!sessionQuery.trim()}
-                      disabled={Boolean(sessionQuery.trim())}
+                      draggable={!sessionQuery.trim() && renamingProjectPath !== item.path}
+                      disabled={Boolean(sessionQuery.trim()) || renamingProjectPath === item.path}
                       onClick={(event) => event.stopPropagation()}
                       onDragStart={(event) => startProjectDrag(event, item)}
                       onDragEnd={cancelSidebarDrag}
@@ -2598,20 +2638,38 @@ export default function App() {
                     >
                       <GripVertical size={13} />
                     </button>
-                    <button
-                      className="project-row"
-                      onClick={() => toggleWorkspace(item)}
-                      title={item.path}
-                      aria-expanded={isExpanded}
-                    >
-                      {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                      <strong>{item.name}</strong>
-                    </button>
+                    {renamingProjectPath === item.path ? (
+                      <input
+                        ref={projectRenameInputRef}
+                        className="session-rename-input project-rename-input"
+                        value={projectRenameDraft}
+                        maxLength={120}
+                        aria-label={t("sidebar.renameProject")}
+                        onChange={(event) => setProjectRenameDraft(event.target.value)}
+                        onBlur={() => void commitProjectRename(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") { event.preventDefault(); void commitProjectRename(item); }
+                          else if (event.key === "Escape") { event.preventDefault(); cancelProjectRename(); }
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                      />
+                    ) : (
+                      <button
+                        className="project-row"
+                        onClick={() => toggleWorkspace(item)}
+                        title={item.path}
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                        <strong>{item.name}</strong>
+                      </button>
+                    )}
                     <button
                       className="project-new-thread"
                       onClick={() => void createThreadInProject(item.path)}
                       aria-label={t("sidebar.newProjectThread", { project: item.name })}
                       title={t("sidebar.newProjectThread", { project: item.name })}
+                      disabled={renamingProjectPath === item.path}
                     >
                       <SquarePen size={15} />
                     </button>
@@ -2621,6 +2679,7 @@ export default function App() {
                       aria-label={t("sidebar.projectActions", { project: item.name })}
                       aria-haspopup="menu"
                       title={t("sidebar.projectActions", { project: item.name })}
+                      disabled={renamingProjectPath === item.path}
                     >
                       <Ellipsis size={15} />
                     </button>
@@ -3282,6 +3341,11 @@ export default function App() {
             aria-label={t("sidebar.projectActions", { project: projectMenuItem.name })}
             style={{ left: projectMenu.left, top: projectMenu.top }}
           >
+            <button type="button" role="menuitem" onClick={() => beginProjectRename(projectMenuItem)}>
+              <Pencil size={14} />
+              <span>{t("sidebar.renameProject")}</span>
+            </button>
+            <div className="session-action-separator" />
             <button className="danger-menu-item" type="button" role="menuitem" onClick={() => requestProjectRemoval(projectMenuItem)}>
               <Trash2 size={14} />
               <span>{t("sidebar.removeProject")}</span>
