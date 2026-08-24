@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthUiEvent, DesktopApi } from "../shared/types";
+import type { AgentEvent, AuthUiEvent, DesktopApi, WeixinBotEvent } from "../shared/types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload);
@@ -83,6 +83,24 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     respondToUi: (id, response) => ipcRenderer.invoke("agent:ui-response", id, response),
     onEvent: (listener) => subscribe<AgentEvent>("agent:event", listener),
     onError: (listener) => subscribe<string>("agent:error", listener),
+  },
+  weixin: {
+    getStatus: () => ipcRenderer.invoke("weixin:status"),
+    chooseWorkspace: () => ipcRenderer.invoke("weixin:choose-workspace"),
+    configureWorkspace: (workspacePath) => ipcRenderer.invoke("weixin:configure-workspace", workspacePath),
+    chooseAttachments: () => ipcRenderer.invoke("weixin:choose-attachments"),
+    startLogin: () => ipcRenderer.invoke("weixin:login-start"),
+    waitLogin: (sessionId) => ipcRenderer.invoke("weixin:login-wait", sessionId),
+    submitVerifyCode: (sessionId, code) => ipcRenderer.invoke("weixin:login-verify", sessionId, code),
+    start: () => ipcRenderer.invoke("weixin:start"),
+    pause: () => ipcRenderer.invoke("weixin:pause"),
+    disconnect: () => ipcRenderer.invoke("weixin:disconnect"),
+    getHistory: (query) => ipcRenderer.invoke("weixin:history", query),
+    send: (input) => ipcRenderer.invoke("weixin:send", input),
+    abortTurn: () => ipcRenderer.invoke("weixin:abort"),
+    setAutoLaunch: (enabled) => ipcRenderer.invoke("weixin:set-auto-launch", enabled),
+    clearAllData: (confirmation) => ipcRenderer.invoke("weixin:clear", confirmation),
+    onEvent: (listener) => subscribe<WeixinBotEvent>("weixin:event", listener),
   },
   onAppCommand: (listener) => subscribe<string>("app:command", listener),
 };

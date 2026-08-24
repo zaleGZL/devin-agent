@@ -37,6 +37,7 @@ installation instructions are included below.
 - Image input, dynamic models and modes, permission requests
 - `@` references for project files, directories, and cached global/project Skills
 - File preview, themes, language switching, and command palette
+- Optional WeChat Bot bridge with QR login, a fixed Devin session, durable message queues, and tray controls
 - Capabilities are negotiated at runtime from the ACP — nothing is hardcoded
 
 ### Composer `@` references
