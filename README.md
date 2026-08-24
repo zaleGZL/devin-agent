@@ -43,6 +43,9 @@ installation instructions are included below.
 ### Composer `@` references
 
 Type `@` in the composer to reference **Files**, **Directories**, or **Skills**.
+The Skill picker discovers repository Skills from `.agents/skills` and `.codex/skills`, plus personal
+Skills from `~/.agents/skills` and `~/.codex/skills`. Duplicate invocation names are shown as conflicts
+and cannot be selected until one definition is renamed or removed.
 
 ## Prerequisites
 

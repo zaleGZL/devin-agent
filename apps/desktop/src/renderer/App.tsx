@@ -321,8 +321,15 @@ export default function App() {
     const skillOptions = rankSkillMentions(availableSkills, mentionQuery).map((mention) => ({
       id: mention.id,
       label: mention.label,
-      detail: [mention.description, mention.source].filter(Boolean).join(" · "),
+      detail: [
+        mention.description,
+        mention.source,
+        mention.conflictingSources?.length
+          ? t("mentions.skillConflict", { paths: mention.conflictingSources.join(", ") })
+          : undefined,
+      ].filter(Boolean).join(" · "),
       mention,
+      disabled: Boolean(mention.conflictingSources?.length),
     } satisfies MentionMenuOption));
     const workspaceOptions = mentionResults.map((result) => ({
       id: `${result.kind}:${result.path}`,

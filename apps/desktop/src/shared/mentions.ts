@@ -34,6 +34,8 @@ export interface SkillMentionRef extends MentionRefBase {
   description?: string;
   scope?: "global" | "project";
   source?: string;
+  /** Other discovered files that declare the same invocation command. */
+  conflictingSources?: readonly string[];
 }
 
 export type MentionRef = FileMentionRef | DirectoryMentionRef | SkillMentionRef;
@@ -72,7 +74,12 @@ export function isMentionRef(value: unknown): value is MentionRef {
     && value.command.length <= 500
     && (value.description === undefined || (typeof value.description === "string" && value.description.length <= 2_000))
     && (value.scope === undefined || value.scope === "global" || value.scope === "project")
-    && (value.source === undefined || (typeof value.source === "string" && value.source.length <= MENTION_PATH_MAX_LENGTH));
+    && (value.source === undefined || (typeof value.source === "string" && value.source.length <= MENTION_PATH_MAX_LENGTH))
+    && (value.conflictingSources === undefined || (
+      Array.isArray(value.conflictingSources)
+      && value.conflictingSources.length <= 32
+      && value.conflictingSources.every((source) => typeof source === "string" && source.length > 0 && source.length <= MENTION_PATH_MAX_LENGTH)
+    ));
 }
 
 export function parseMentionRefs(value: unknown, maxItems = MENTION_RESULT_LIMIT): MentionRef[] {

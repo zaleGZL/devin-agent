@@ -95,5 +95,12 @@ describe("mention prompt serialization", () => {
     await expect(serializeMentionPrompt({ workspaceRoot: root, text: "x", embeddedContext: true, availableSkills: [], mentions: [
       { id: "skill", kind: "skill", label: "research", command: "agents:research" },
     ] })).rejects.toThrow(/session snapshot/);
+    await expect(serializeMentionPrompt({
+      workspaceRoot: root,
+      text: "x",
+      embeddedContext: true,
+      availableSkills: [{ ...skill, conflictingSources: ["~/.codex/skills/research/SKILL.md"] }],
+      mentions: [{ id: "skill", kind: "skill", label: "research", command: "agents:research" }],
+    })).rejects.toThrow(/ambiguous/);
   });
 });
