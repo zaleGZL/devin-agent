@@ -48,6 +48,38 @@ authenticated, locally installed Devin CLI.
 - For a code commit, increment the patch component in `apps/desktop/package.json` and include it in the same commit.
   A documentation-only commit does not require a version bump.
 
+### Renderer component architecture
+
+Renderer code is organized by business ownership, not accumulated in the composition root:
+
+```text
+apps/desktop/src/renderer/
+  App.tsx                 application composition and cross-domain coordination only
+  features/<domain>/      business components, domain presentation models, domain-only helpers
+  components/             reusable stateless UI with no business or Electron/ACP ownership
+  lib/                    cross-domain pure state transitions, parsers, formatters, and adapters
+```
+
+Required rules:
+
+- Split first by business domain: conversation, composer, sessions, inspector, settings, interactions,
+  plans, and future domains own their components under `features/<domain>/`.
+- `App.tsx` may connect global state and compose features, but it must not declare additional React
+  components or contain reusable/domain presentation implementations.
+- A component belongs in `components/` only when at least two business domains can reuse it and it has no
+  domain state, ACP behavior, IPC side effect, or Electron-native ownership. Otherwise keep it with its feature.
+- Keep domain-only types and helpers beside the owning feature. Move logic into `lib/` only when it is pure
+  and genuinely cross-domain; do not create generic `utils.ts` or `components.tsx` dumping grounds.
+- Extract a component when it has an independent business responsibility, state lifecycle, interaction contract,
+  or reusable presentation boundary. Do not hide a monolith by moving the entire file into one controller, hook,
+  context provider, or renamed view module.
+- Business components receive explicit data and callbacks. They must not add raw IPC, duplicate ACP capability
+  truth, or bypass the main/preload boundary.
+- Keep component modules small enough to review as one responsibility. The current mechanical limits are 2,500
+  lines for `App.tsx` and 600 lines for each `features/**/*.ts(x)` module; these are upper guardrails, not targets.
+- Run `pnpm check:renderer-architecture` after renderer structure changes. Its remediation messages point back to
+  this section, and the check is part of `pnpm check` and CI.
+
 ## Documentation obligations
 
 The repository, not chat or review history, owns durable decisions. Follow the update triggers in

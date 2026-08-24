@@ -24,6 +24,7 @@ A change is complete only when:
 | Buildability | Electron and renderer builds in `pnpm check` |
 | Package startup | Platform package jobs plus packaged smoke tests |
 | Generated Devin CLI mirror consistency | Sync-script tests in the root test command |
+| Renderer composition root and feature-module size boundaries | `pnpm check:renderer-architecture` in `pnpm check` and CI |
 | Tag/artifact release shape | Publish-script preconditions and tag-triggered workflow checks |
 
 Custom failures should state the violated invariant and a concrete remediation. This turns a failed check into useful
@@ -47,7 +48,7 @@ These are explicit engineering gaps, not claims that the current product is brok
 | Renderer end-to-end interaction coverage is limited; most renderer tests target pure modules | Integration regressions can escape unit tests | Stable Electron UI smoke coverage for critical user journeys |
 | Authenticated ACP smoke testing is opt-in and absent from CI | Upstream runtime drift may be found late | A secure scheduled/manual environment with a pinned test account and actionable diagnostics |
 | CI packages macOS and Linux but not Windows, while Windows remains a documented platform with sandbox limits | Release behavior can diverge by platform | A Windows package job with startup smoke evidence or an explicit removal of Windows support claims |
-| Large UI composition remains concentrated in `renderer/App.tsx` | Changes have broad review and regression surface | Incremental extraction behind tested state/view contracts without changing process boundaries |
+| App-level state coordination remains substantial after extracting business UI from `renderer/App.tsx` | Cross-domain changes can still touch a broad controller surface | Move stable session, composer and inspector lifecycles into domain controllers, then lower the 2,500-line guardrail |
 | No recurring automated documentation/quality gardening task exists | Small drift can compound | A bounded recurring audit that opens targeted changes and never bypasses review or release authority |
 
 Update this table when a gap is closed, materially changes, or gains executable enforcement. New recurring review

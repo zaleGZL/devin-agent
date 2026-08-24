@@ -63,7 +63,10 @@ DEVIN_LIVE_TEST=1 pnpm --dir apps/desktop smoke:devin
    or ACP request handling, read `docs/devin-cli.md`, the relevant mirror pages, and SDK types.
 9. **Tests follow modules.** Add or update co-located Vitest tests for changed behavior. Prefer
    mocks for ACP logic; use the live smoke test only when authenticated integration evidence is needed.
-10. **Every code commit bumps the desktop patch version.** Increment `x.y.Z` in
+10. **Renderer code follows business ownership.** Keep `App.tsx` as the composition root. Put
+    business UI in `renderer/features/<domain>/`, shared stateless UI in `renderer/components/`,
+    and pure cross-domain logic in `renderer/lib/`; never grow another all-in-one component file.
+11. **Every code commit bumps the desktop patch version.** Increment `x.y.Z` in
     `apps/desktop/package.json` in the same commit. Documentation-only commits do not bump it.
 
 ## Change contract

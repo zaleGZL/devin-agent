@@ -41,6 +41,32 @@ Dependencies flow from platform-specific edges toward explicit shared contracts.
 validated at entry; new native behavior requires a typed `DesktopApi` method, a preload mapping, a main
 handler, and tests at the validation boundary.
 
+### Renderer feature topology
+
+`renderer/App.tsx` is the application composition root. It may coordinate shared runtime/session state and wire
+feature callbacks, but business presentation belongs to the feature that owns it:
+
+```text
+renderer/
+  App.tsx
+  features/
+    app/            shell-level composition contracts and layout
+    conversation/   messages, work log, follow-up queue, context usage
+    composer/       attachments, model and permission controls
+    sessions/       project/session sidebar, search, session dialogs
+    inspector/      workspace changes and file preview
+    settings/       profile, runtime, model, appearance and archive settings
+    interactions/   permission, elicitation, extension and side-chat UI
+    plans/          structured plan editing and auth dialogs
+  components/       cross-feature stateless presentation primitives only
+  lib/              cross-feature pure state, parsing, normalization and formatting
+```
+
+Feature modules may depend on `shared/`, renderer `lib/`, and deliberately reusable `components/`. They must not
+depend on `App.tsx`, create raw IPC channels, or move native/runtime ownership out of main. Cross-feature imports
+should be limited to an explicit public component or shared presentation contract; when two features become
+mutually dependent, move only the stable pure contract downward rather than introducing a cycle.
+
 ## State ownership
 
 | State | Source of truth | Desktop behavior |
@@ -74,6 +100,7 @@ handler, and tests at the validation boundary.
 - `apps/desktop/src/shared/acp-types.ts` — ACP structural types, capability helpers, and redaction.
 - `apps/desktop/src/shared/capabilities.ts` — stable capability normalization and feature gates.
 - `apps/desktop/src/renderer/App.tsx` — current main UI composition root.
+- `apps/desktop/src/renderer/features/` — business-owned renderer components and shell presentation boundaries.
 - `apps/desktop/src/renderer/lib/acp-normalizer.ts` — ACP event normalization for presentation.
 - `apps/desktop/src/renderer/lib/conversation.ts` — renderer conversation state transitions.
 
