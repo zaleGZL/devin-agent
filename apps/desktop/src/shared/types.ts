@@ -19,6 +19,74 @@ export interface UserProfile {
   avatarDataUrl?: string;
 }
 
+export type WeixinConnectionState =
+  | "unconfigured"
+  | "workspace-ready"
+  | "login-required"
+  | "connecting"
+  | "online"
+  | "paused"
+  | "error";
+
+export interface WeixinMedia {
+  kind: "image" | "voice" | "file" | "video";
+  name: string;
+  mimeType: string;
+  size: number;
+  localPath?: string;
+}
+
+export interface WeixinMessage {
+  id: number;
+  platformId?: string;
+  direction: "inbound" | "outbound";
+  source: "weixin" | "desktop" | "agent" | "system";
+  role: "user" | "assistant" | "system";
+  text: string;
+  media: WeixinMedia[];
+  status: "pending" | "processing" | "sent" | "failed";
+  createdAt: string;
+}
+
+export interface WeixinBotStatus {
+  state: WeixinConnectionState;
+  workspacePath?: string;
+  sessionId?: string;
+  accountId?: string;
+  boundUserId?: string;
+  online: boolean;
+  autoLaunch: boolean;
+  running: boolean;
+  lastError?: string;
+  contextUsage?: AgentSessionStats["contextUsage"];
+  mediaBytes: number;
+  modelId?: string;
+  modeId?: string;
+}
+
+export interface WeixinLoginSession {
+  sessionId: string;
+  qrContent: string;
+  qrImageDataUrl: string;
+  expiresAt: string;
+}
+
+export interface WeixinLoginState {
+  state: "waiting" | "scanned" | "verify-required" | "expired" | "connected" | "error";
+  message: string;
+}
+
+export interface WeixinHistoryPage {
+  messages: WeixinMessage[];
+  hasMore: boolean;
+  before?: number;
+}
+
+export type WeixinBotEvent =
+  | { type: "status"; status: WeixinBotStatus }
+  | { type: "message"; message: WeixinMessage }
+  | { type: "history-reset" };
+
 export interface WorkspaceItem {
   path: string;
   name: string;
@@ -269,6 +337,24 @@ export interface DesktopApi {
     respondToUi(id: string, response: Record<string, unknown>): Promise<{ pending?: boolean } | void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     onError(listener: (message: string) => void): () => void;
+  };
+  weixin: {
+    getStatus(): Promise<WeixinBotStatus>;
+    chooseWorkspace(): Promise<string | null>;
+    configureWorkspace(path: string): Promise<void>;
+    chooseAttachments(): Promise<string[]>;
+    startLogin(): Promise<WeixinLoginSession>;
+    waitLogin(sessionId: string): Promise<WeixinLoginState>;
+    submitVerifyCode(sessionId: string, code: string): Promise<void>;
+    start(): Promise<void>;
+    pause(): Promise<void>;
+    disconnect(): Promise<void>;
+    getHistory(query?: { before?: number; limit?: number }): Promise<WeixinHistoryPage>;
+    send(input: { text: string; attachmentPaths?: string[] }): Promise<void>;
+    abortTurn(): Promise<void>;
+    setAutoLaunch(enabled: boolean): Promise<void>;
+    clearAllData(confirmation: string): Promise<void>;
+    onEvent(listener: (event: WeixinBotEvent) => void): () => void;
   };
   onAppCommand?(listener: (command: string) => void): () => void;
 }

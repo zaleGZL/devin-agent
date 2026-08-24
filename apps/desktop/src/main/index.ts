@@ -14,6 +14,7 @@ import {
   protocol,
   screen,
   shell,
+  Tray,
 } from "electron";
 import { discoverDevinBinary, validateDevinBinary } from "./devin-discovery";
 import { createDevinWorkspaceUrl } from "./devin-desktop";
@@ -84,6 +85,7 @@ import {
   revisedCommandFromResult,
 } from "./permission-interactions";
 import { beginCommandRevision, completeCommandRevision, rollbackCommandRevision } from "./command-revision-state";
+import { WeixinBotService } from "./weixin/service";
 
 /**
  * The ACP implementation is owned by the runtime layer. The shell only relies
@@ -108,6 +110,9 @@ let mainWindow: BrowserWindow | undefined;
 let agentHost: RuntimeHost | undefined;
 let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
+let weixinBot: WeixinBotService | undefined;
+let tray: Tray | undefined;
+let quitting = false;
 let devinCliUpdatePromise: Promise<DevinCliUpdateStatus> | undefined;
 const sessionWindows = new Map<string, BrowserWindow>();
 const auxiliaryWindowIds = new Set<number>();
@@ -124,6 +129,7 @@ const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 // Reuse the verified PNG asset in development so a cosmetic icon failure can
 // never abort BrowserWindow construction.
 const developmentIconPath = path.join(currentDirectory, "../../build/icon.png");
+const trayIconPath = app.isPackaged ? path.join(app.getAppPath(), "build/icon.png") : developmentIconPath;
 const legacyUserDataPath = app.getPath("userData");
 const userDataOverride = process.env.DEVIN_AGENT_USER_DATA;
 const stableUserDataPath = userDataOverride
@@ -564,7 +570,7 @@ function windowForSender(senderId: number): BrowserWindow | undefined {
   return rendererWindows().find((window) => window.webContents.id === senderId);
 }
 
-function createWindow(options: { sessionId?: string; title?: string } = {}): BrowserWindow {
+function createWindow(options: { sessionId?: string; title?: string; background?: boolean } = {}): BrowserWindow {
   const { workArea } = screen.getPrimaryDisplay();
   const windowWidth = Math.floor(workArea.width * 0.8);
   const windowHeight = Math.floor(workArea.height * 0.9);
@@ -602,10 +608,16 @@ function createWindow(options: { sessionId?: string; title?: string } = {}): Bro
     if (browserWindow.isDestroyed()) return;
     browserWindow.setPosition(windowX, windowY);
     if (options.title) browserWindow.setTitle(`${options.title} — Devin Agent`);
-    browserWindow.show();
+    if (!options.background) browserWindow.show();
   });
   const webContentsId = browserWindow.webContents.id;
   if (options.sessionId) auxiliaryWindowIds.add(webContentsId);
+  browserWindow.on("close", (event) => {
+    if (mainWindow !== browserWindow || quitting || !weixinBot?.store.getState().accountId) return;
+    event.preventDefault();
+    browserWindow.hide();
+    ensureTray();
+  });
   browserWindow.on("closed", () => {
     interactionBroker.cancelOwner(webContentsId);
     auxiliaryWindowIds.delete(webContentsId);
@@ -662,6 +674,48 @@ function installMenu(): void {
 
 function sendAppCommand(command: string): void {
   (BrowserWindow.getFocusedWindow() ?? mainWindow)?.webContents.send("app:command", command);
+}
+
+function ensureTray(): void {
+  if (!tray) {
+    tray = new Tray(trayIconPath);
+    tray.setToolTip("Devin Agent · 微信 Bot");
+    tray.on("double-click", showMainWindow);
+  }
+  void refreshTrayMenu();
+}
+
+async function refreshTrayMenu(): Promise<void> {
+  if (!tray || !weixinBot) return;
+  const bot = weixinBot;
+  const status = await bot.getStatus();
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 Devin Agent", click: showMainWindow },
+    {
+      label: status.online ? "暂停微信 Bot" : "恢复微信 Bot",
+      click: () => void (status.online ? bot.pause() : bot.start())
+        .then(() => refreshTrayMenu())
+        .catch(() => showMainWindow()),
+    },
+    { type: "separator" },
+    { label: "退出 Devin Agent", click: () => { quitting = true; app.quit(); } },
+  ]));
+}
+
+function showMainWindow(): void {
+  const target = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!target) {
+    createWindow();
+    return;
+  }
+  if (target.isMinimized()) target.restore();
+  target.show();
+  target.focus();
+}
+
+function destroyTray(): void {
+  tray?.destroy();
+  tray = undefined;
 }
 
 function registerIpc(): void {
@@ -848,21 +902,24 @@ function registerIpc(): void {
 
   ipcMain.handle("sessions:list", async (ipcEvent, cwd: unknown) => {
     const requestedCwd = cwd === undefined ? undefined : expectString(cwd, "cwd", 4_096);
+    const botSessionId = weixinBot?.store.getState().sessionId;
     try {
       const remote = await agentHost?.listSessions?.(requestedCwd);
       if (remote) {
-        for (const summary of remote) await upsertSessionSummary(summary);
-        return listSessions(requestedCwd);
+        for (const summary of remote) {
+          if (summary.id !== botSessionId) await upsertSessionSummary(summary);
+        }
+        return (await listSessions(requestedCwd)).filter((session) => session.id !== botSessionId);
       }
     } catch (error) {
       ipcEvent.sender.send("agent:error", safeError(error));
     }
-    return listSessions(requestedCwd);
+    return (await listSessions(requestedCwd)).filter((session) => session.id !== botSessionId);
   });
-  ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectString(id, "session id", 200), expectBoolean(pinned, "pinned")));
+  ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectMutableSessionId(id), expectBoolean(pinned, "pinned")));
   ipcMain.handle("sessions:reorder", (_event, ids: unknown) => reorderSessions(expectStringList(ids, "session ids", 500, 200)));
   ipcMain.handle("sessions:rename", async (_event, id: unknown, title: unknown) => {
-    const sessionId = expectString(id, "session id", 200);
+    const sessionId = expectMutableSessionId(id);
     const sessionTitle = expectString(title, "session title", 120).trim();
     if (!sessionTitle) throw new Error("Session title must be between 1 and 120 characters");
     const renamed = agentHost?.renameSession
@@ -871,10 +928,10 @@ function registerIpc(): void {
     if (renamed) broadcastToRenderers("agent:event", { type: "session_renamed", session: renamed });
     return renamed;
   });
-  ipcMain.handle("sessions:archive", (_event, id: unknown) => archiveSession(expectString(id, "session id", 200)));
-  ipcMain.handle("sessions:unarchive", (_event, id: unknown) => unarchiveSession(expectString(id, "session id", 200)));
+  ipcMain.handle("sessions:archive", (_event, id: unknown) => archiveSession(expectMutableSessionId(id)));
+  ipcMain.handle("sessions:unarchive", (_event, id: unknown) => unarchiveSession(expectMutableSessionId(id)));
   ipcMain.handle("sessions:open-in-new-window", async (_event, id: unknown) => {
-    const sessionId = expectString(id, "session id", 200);
+    const sessionId = expectMutableSessionId(id);
     const session = (await listSessions()).find((candidate) => candidate.id === sessionId);
     if (!session) throw new Error("This Devin session is no longer available");
     const existing = sessionWindows.get(sessionId);
@@ -887,7 +944,7 @@ function registerIpc(): void {
     createWindow({ sessionId, title: session.title });
   });
   ipcMain.handle("sessions:delete", async (_event, id: unknown) => {
-    const sessionId = expectString(id, "session id", 200);
+    const sessionId = expectMutableSessionId(id);
     if (!agentHost?.deleteSession) throw new Error("当前 Devin ACP 未提供 session/delete");
     await agentHost.deleteSession(sessionId);
     await removeSessionSummary(sessionId);
@@ -910,6 +967,10 @@ function registerIpc(): void {
 
   ipcMain.handle("agent:start", async (ipcEvent, value: unknown) => {
     const options = expectAgentStartOptions(value);
+    const requestedSessionId = options.sessionId ?? options.sessionPath;
+    if (requestedSessionId && requestedSessionId === weixinBot?.store.getState().sessionId) {
+      throw new Error("微信 Bot 固定会话只能从微信 Bot 管理界面使用");
+    }
     if (options.cwd) rendererCwds.set(ipcEvent.sender.id, options.cwd);
     if (options.project && options.cwd) {
       await recentWorkspaces.touch(options.cwd);
@@ -982,6 +1043,92 @@ function registerIpc(): void {
     if (!agentHost?.respondToUi) throw new Error("Devin ACP runtime is not available");
     return agentHost.respondToUi(requestId, data);
   });
+
+  ipcMain.handle("weixin:status", () => requireWeixinBot().getStatus());
+  ipcMain.handle("weixin:choose-workspace", async (ipcEvent) => {
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, {
+      title: "选择微信 Bot 工作目录",
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "选择并继续",
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle("weixin:configure-workspace", (_event, value: unknown) => {
+    return requireWeixinBot().configureWorkspace(expectString(value, "微信 Bot 工作目录", 4_096));
+  });
+  ipcMain.handle("weixin:choose-attachments", async (ipcEvent) => {
+    const state = requireWeixinBot().store.getState();
+    if (!state.workspacePath) throw new Error("请先配置微信 Bot 工作目录");
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, {
+      title: "从工作目录发送到微信",
+      defaultPath: state.workspacePath,
+      properties: ["openFile", "multiSelections"],
+      buttonLabel: "添加",
+    });
+    if (result.canceled) return [];
+    const root = await fsp.realpath(state.workspacePath);
+    const files: string[] = [];
+    for (const candidate of result.filePaths.slice(0, 10)) {
+      const real = await fsp.realpath(candidate);
+      if (!isPathInside(root, real)) throw new Error("只能选择微信 Bot 工作目录内的文件");
+      const stat = await fsp.stat(real);
+      if (!stat.isFile() || stat.size > 100 * 1024 * 1024) {
+        throw new Error("附件必须是 100 MB 以内的文件");
+      }
+      files.push(real);
+    }
+    return files;
+  });
+  ipcMain.handle("weixin:login-start", () => requireWeixinBot().startLogin());
+  ipcMain.handle("weixin:login-wait", (_event, value: unknown) => {
+    return requireWeixinBot().waitLogin(expectString(value, "微信登录会话 id", 200));
+  });
+  ipcMain.handle("weixin:login-verify", (_event, sessionValue: unknown, codeValue: unknown) => {
+    return requireWeixinBot().submitVerifyCode(
+      expectString(sessionValue, "微信登录会话 id", 200),
+      expectString(codeValue, "微信验证码", 8),
+    );
+  });
+  ipcMain.handle("weixin:start", async () => {
+    await requireWeixinBot().start();
+    ensureTray();
+  });
+  ipcMain.handle("weixin:pause", async () => {
+    await requireWeixinBot().pause();
+    await refreshTrayMenu();
+  });
+  ipcMain.handle("weixin:disconnect", async () => {
+    await requireWeixinBot().disconnect();
+    await refreshTrayMenu();
+  });
+  ipcMain.handle("weixin:history", (_event, value: unknown) => {
+    const query = value === undefined ? {} : expectRecord(value, "微信消息分页参数");
+    return requireWeixinBot().history({
+      ...(query.before === undefined ? {} : { before: expectPositiveInteger(query.before, "before") }),
+      ...(query.limit === undefined ? {} : { limit: expectPositiveInteger(query.limit, "limit", 200) }),
+    });
+  });
+  ipcMain.handle("weixin:send", (_event, value: unknown) => {
+    const input = expectRecord(value, "微信消息");
+    const text = expectString(input.text, "微信消息文本", 100_000);
+    const attachmentPaths = input.attachmentPaths === undefined
+      ? []
+      : expectStringList(input.attachmentPaths, "微信附件路径", 10, 4_096);
+    return requireWeixinBot().send(text, attachmentPaths);
+  });
+  ipcMain.handle("weixin:abort", () => requireWeixinBot().abortTurn());
+  ipcMain.handle("weixin:set-auto-launch", async (_event, value: unknown) => {
+    const enabled = expectBoolean(value, "微信 Bot 开机启动");
+    app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? ["--weixin-background"] : [] });
+    await requireWeixinBot().setAutoLaunch(enabled);
+  });
+  ipcMain.handle("weixin:clear", async (_event, value: unknown) => {
+    await requireWeixinBot().clearAllData(expectString(value, "微信 Bot 清除确认", 100));
+    app.setLoginItemSettings({ openAtLogin: false, args: [] });
+    destroyTray();
+  });
 }
 
 const ALLOWED_AGENT_COMMANDS = new Set(["prompt", "cancel", "abort", "follow_up", "side_chat", "new_session", "get_state", "set_model", "set_mode", "set_config_option", "get_available_models", "get_available_thinking_levels", "compact", "get_session_stats", "get_commands", "handoff", "reconnect"]);
@@ -991,19 +1138,41 @@ app.whenReady().then(async () => {
   await migrateDesktopData();
   recentWorkspaces = new RecentWorkspaces(path.join(app.getPath("userData"), "recent-workspaces.json"));
   appSettings = new AppSettings(appSettingsFile);
+  weixinBot = new WeixinBotService(
+    path.join(app.getPath("userData"), "weixin"),
+    app.getVersion(),
+    appSettings,
+    (event) => {
+      broadcastToRenderers("weixin:event", event);
+      if (event.type === "status") {
+        if (event.status.accountId) ensureTray();
+        else destroyTray();
+      }
+    },
+  );
   configureSessionIndex(sessionIndexFile);
   agentHost = await createRuntimeHost();
   installFilePreviewProtocol();
   registerIpc();
   installMenu();
-  createWindow();
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  await weixinBot.initialize();
+  const background = process.argv.includes("--weixin-background") && Boolean(weixinBot.store.getState().accountId);
+  createWindow({ background });
+  if (weixinBot.store.getState().accountId) ensureTray();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMainWindow();
+  });
 });
 
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin" && !weixinBot?.store.getState().accountId) app.quit();
+});
 app.on("before-quit", () => {
+  quitting = true;
   interactionBroker.cancelAll();
   void agentHost?.stop?.();
+  void weixinBot?.shutdown();
 });
 
 async function getDevinProviderStatus(): Promise<ProviderStatus> {
@@ -1039,6 +1208,7 @@ async function updateDevinCli(): Promise<DevinCliUpdateStatus> {
   if (status.state !== "available" || !status.latestVersion) return status;
 
   await agentHost?.stop?.();
+  await weixinBot?.stopAgentRuntime();
   agentHost = undefined;
   try {
     return await installDevinCliUpdate(binary.path, status.latestVersion);
@@ -1161,6 +1331,23 @@ function expectModelIds(value: unknown): string[] {
 function expectStringList(value: unknown, name: string, maxItems: number, maxItemLength: number): string[] {
   if (!Array.isArray(value) || value.length > maxItems) throw new Error(`Invalid ${name}`);
   return value.map((entry) => expectString(entry, name, maxItemLength));
+}
+function expectPositiveInteger(value: unknown, name: string, maximum = Number.MAX_SAFE_INTEGER): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return value;
+}
+function expectMutableSessionId(value: unknown): string {
+  const sessionId = expectString(value, "session id", 200);
+  if (sessionId === weixinBot?.store.getState().sessionId) {
+    throw new Error("微信 Bot 固定会话只能从微信 Bot 管理界面修改");
+  }
+  return sessionId;
+}
+function requireWeixinBot(): WeixinBotService {
+  if (!weixinBot) throw new Error("微信 Bot 服务尚未初始化");
+  return weixinBot;
 }
 function expectAgentStartOptions(value: unknown): AgentStartOptions {
   const data = expectRecord(value, "agent options");

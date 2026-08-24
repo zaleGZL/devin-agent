@@ -96,6 +96,7 @@ import type {
   WorkspaceChange,
   WorkspaceChanges,
   WorkspaceDiff,
+  WeixinBotStatus,
 } from "../shared/types";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
@@ -184,6 +185,7 @@ import {
 import { getFeatureGate, type DevinCapabilities } from "../shared/capabilities";
 import type { AvailableCommand, PlanState } from "../shared/conversation";
 import { initialElicitationValues, validateElicitationValues } from "../shared/interactions";
+import { WeixinBotView } from "./WeixinBotView";
 
 interface Attachment extends ChatImage {
   name: string;
@@ -365,6 +367,8 @@ export default function App() {
   const [chainConversations, setChainConversations] = useState<ChainConversationStore>({});
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
+  const [activeView, setActiveView] = useState<"thread" | "weixin">("thread");
+  const [weixinStatus, setWeixinStatus] = useState<WeixinBotStatus>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<InlineMentionEditorHandle>(null);
   const composingRef = useRef(false);
@@ -1203,6 +1207,13 @@ export default function App() {
   }, [markSessionRunning, refreshSessionStats, refreshSessions, setSessionUnread, t, updateSessionMessages]);
 
   useEffect(() => {
+    void window.devinAgent.weixin.getStatus().then(setWeixinStatus).catch(() => undefined);
+    return window.devinAgent.weixin.onEvent((event) => {
+      if (event.type === "status") setWeixinStatus(event.status);
+    });
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape" && sessionMenu) {
         event.preventDefault();
@@ -1426,6 +1437,7 @@ export default function App() {
   }, [inspectorOpen]);
 
   const chooseWorkspace = async () => {
+    setActiveView("thread");
     const selected = await window.devinAgent.workspace.choose();
     if (!selected) return undefined;
     setWorkspaces(await window.devinAgent.workspace.recent());
@@ -1434,11 +1446,13 @@ export default function App() {
   };
 
   const createNewThread = async () => {
+    setActiveView("thread");
     const projectPath = workspaceRef.current;
     await createThreadInProject(projectPath);
   };
 
   const createThreadInProject = async (projectPath?: string) => {
+    setActiveView("thread");
     const homeDirectory = homeDirectoryRef.current ?? await window.devinAgent.app.homeDirectory();
     setLoading(true);
     homeDirectoryRef.current = homeDirectory;
@@ -1512,6 +1526,7 @@ export default function App() {
   };
 
   const openSession = async (session: SessionSummary) => {
+    setActiveView("thread");
     if (session.path === activeSession || loading) return;
     const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
     const cachedMessages = sessionMessagesRef.current.get(session.path);
@@ -2480,6 +2495,7 @@ export default function App() {
     return query ? tasks.filter((session) => session.title.toLowerCase().includes(query)) : tasks;
   }, [sessionQuery, sidebarSessionGroups.recent]);
   const activeTitle = sessions.find((session) => session.path === activeSession)?.title ?? (messages[0]?.text || t("status.newThread"));
+  const selectedThreadPath = activeView === "thread" ? activeSession : undefined;
   const workspaceName = workspace ? workspace.split(/[\\/]/).filter(Boolean).at(-1) : undefined;
   const selectedModel = availableModels.find((candidate) => candidate.provider === provider && candidate.id === model);
   const selectedCapabilityModel = capabilities?.models.find((candidate) => candidate.id === model);
@@ -2524,6 +2540,10 @@ export default function App() {
 
         <div className="sidebar-primary">
           <button className="new-thread-button" onClick={() => void createNewThread()}><Plus size={16} /> {t("sidebar.newThread")} <kbd>⌘N</kbd></button>
+          <button className={`new-thread-button weixin-sidebar-button${activeView === "weixin" ? " active" : ""}`} onClick={() => setActiveView("weixin")}>
+            <Bot size={16} /> 微信 Bot
+            <span className={`weixin-sidebar-dot${weixinStatus?.online ? " online" : weixinStatus?.lastError ? " error" : ""}`} />
+          </button>
         </div>
 
         <div className="thread-list">
@@ -2534,7 +2554,7 @@ export default function App() {
                 {pinnedSessions.map((session) => (
                   <div
                     key={session.path}
-                    className={`recent-task-item pinned-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                    className={`recent-task-item pinned-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                     onContextMenu={(event) => openSessionMenu(event, session)}
                     onDragOver={(event) => dragSessionOver(event, session.id, "pinned")}
                     onDrop={(event) => void finishSidebarDrag(event)}
@@ -2573,7 +2593,7 @@ export default function App() {
                         className="thread-row pinned-task-row"
                         onClick={() => void openSession(session)}
                         title={session.title}
-                        aria-current={session.path === activeSession ? "page" : undefined}
+                        aria-current={session.path === selectedThreadPath ? "page" : undefined}
                       >
                         <span className="thread-copy"><strong>{session.title}</strong></span>
                       </button>
@@ -2690,7 +2710,7 @@ export default function App() {
                       {visibleTasks.map((session) => (
                         <div
                           key={session.path}
-                          className={`project-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                          className={`project-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                           onContextMenu={(event) => openSessionMenu(event, session)}
                           onDragOver={(event) => dragSessionOver(event, session.id, `project:${item.path}`)}
                           onDrop={(event) => void finishSidebarDrag(event)}
@@ -2729,7 +2749,7 @@ export default function App() {
                               className="project-task-row"
                               onClick={() => void openSession(session)}
                               title={session.title}
-                              aria-current={session.path === activeSession ? "page" : undefined}
+                              aria-current={session.path === selectedThreadPath ? "page" : undefined}
                             >
                               <span>{session.title}</span>
                             </button>
@@ -2780,7 +2800,7 @@ export default function App() {
             {recentTasks.map((session) => (
               <div
                 key={session.path}
-                className={`recent-task-item${session.path === activeSession ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                className={`recent-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
                 onContextMenu={(event) => openSessionMenu(event, session)}
                 onDragOver={(event) => dragSessionOver(event, session.id, "recent")}
                 onDrop={(event) => void finishSidebarDrag(event)}
@@ -2854,6 +2874,9 @@ export default function App() {
       </aside>
 
       <main className="main-pane">
+        {activeView === "weixin" ? (
+          <WeixinBotView sidebarOpen={sidebarOpen} onShowSidebar={() => setSidebarOpen(true)} />
+        ) : (
         <div className="thread-layout" ref={threadLayoutRef}>
           <div className="conversation-column">
             <header className="thread-header">
@@ -3230,6 +3253,7 @@ export default function App() {
             </>
           )}
         </div>
+        )}
       </main>
 
       {annotationSelection && (

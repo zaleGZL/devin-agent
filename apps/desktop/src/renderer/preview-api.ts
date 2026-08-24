@@ -27,6 +27,7 @@ function previewSession(id: string, title: string, ageMs: number, messageCount: 
 }
 
 export function createPreviewApi(): DesktopApi {
+  const weixinConnected = new URLSearchParams(window.location.search).get("weixin") === "connected";
   return {
     platform: "darwin",
     app: {
@@ -191,6 +192,39 @@ export function createPreviewApi(): DesktopApi {
       respondToUi: async () => undefined,
       onEvent: () => () => undefined,
       onError: () => () => undefined,
+    },
+    weixin: {
+      getStatus: async () => ({
+        state: weixinConnected ? "online" : "workspace-ready",
+        workspacePath: workspace,
+        accountId: weixinConnected ? "preview-account" : undefined,
+        online: weixinConnected,
+        autoLaunch: false,
+        running: false,
+        mediaBytes: 0,
+        modelId: "adaptive",
+        modeId: "accept-edits",
+      }),
+      chooseWorkspace: async () => workspace,
+      configureWorkspace: async () => undefined,
+      chooseAttachments: async () => [],
+      startLogin: async () => ({
+        sessionId: "preview-login",
+        qrContent: "preview",
+        qrImageDataUrl: "data:image/png;base64,",
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      }),
+      waitLogin: async () => ({ state: "waiting", message: "等待扫码" }),
+      submitVerifyCode: async () => undefined,
+      start: async () => undefined,
+      pause: async () => undefined,
+      disconnect: async () => undefined,
+      getHistory: async () => ({ messages: [], hasMore: false }),
+      send: async () => undefined,
+      abortTurn: async () => undefined,
+      setAutoLaunch: async () => undefined,
+      clearAllData: async () => undefined,
+      onEvent: () => () => undefined,
     },
   };
 }

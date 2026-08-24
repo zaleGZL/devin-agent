@@ -67,6 +67,11 @@ button:disabled { cursor: default; opacity: .45; }
 .sidebar-primary { padding: 4px 10px 8px; }
 .new-thread-button { width: 100%; height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 8px; border-radius: 7px; font-weight: 560; text-align: left; }
 .new-thread-button:hover { background: var(--hover); }
+.weixin-sidebar-button { position: relative; margin-top: 2px; }
+.weixin-sidebar-button.active { background: var(--tree-selected); }
+.weixin-sidebar-dot { width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 2px color-mix(in srgb, var(--faint) 12%, transparent); }
+.weixin-sidebar-dot.online { background: var(--success); box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 15%, transparent); }
+.weixin-sidebar-dot.error { background: var(--danger); }
 kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-serif; font-size: 11px; font-weight: 400; }
 .thread-list { padding: 8px; overflow: auto; min-height: 0; flex: 1; }
 .section-label { color: var(--tree-muted); font-size: 11.5px; font-weight: 560; letter-spacing: 0; }
@@ -146,6 +151,68 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 
 
 .main-pane { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--canvas); }
+.weixin-view { position: relative; min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--canvas); }
+.weixin-header { flex: none; }
+.weixin-avatar { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 9px; color: color-mix(in srgb, var(--success) 82%, var(--ink)); background: color-mix(in srgb, var(--success) 13%, var(--surface)); }
+.weixin-onboarding { min-height: 0; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 28px; text-align: center; }
+.weixin-hero-icon { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 15px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); color: var(--success); box-shadow: 0 6px 20px rgba(33,33,29,.05); }
+.weixin-onboarding h1 { margin: 0 0 9px; font-size: 23px; letter-spacing: -.03em; }
+.weixin-onboarding > p { max-width: 570px; margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.weixin-bound-path { max-width: min(100%, 570px) !important; overflow: hidden; padding: 8px 11px; border-radius: 7px; background: var(--line-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.weixin-qr { width: 244px; height: 244px; margin: 4px 0 12px; padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: white; image-rendering: crisp-edges; }
+.weixin-verify { display: flex; gap: 7px; margin-bottom: 10px; }
+.weixin-verify input { width: 210px; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); outline: 0; }
+.weixin-settings { position: relative; -webkit-app-region: no-drag; }
+.weixin-settings > summary { list-style: none; }
+.weixin-settings > summary::-webkit-details-marker { display: none; }
+.weixin-settings[open] > summary { background: var(--selected); color: var(--ink); }
+.weixin-settings-panel { position: absolute; z-index: 70; top: calc(100% + 8px); right: 0; width: min(330px, calc(100vw - 30px)); padding: 13px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); -webkit-app-region: no-drag; }
+.weixin-settings-heading { display: flex; flex-direction: column; padding: 1px 2px 11px; border-bottom: 1px solid var(--line-soft); }
+.weixin-settings-heading strong { font-size: 13px; font-weight: 630; }
+.weixin-settings-heading span { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.weixin-settings-meta { margin: 6px 0; }
+.weixin-settings-meta > div { min-height: 30px; display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: center; gap: 8px; }
+.weixin-settings-meta dt { color: var(--muted); font-size: 11px; }
+.weixin-settings-meta dd { min-width: 0; margin: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.weixin-settings-toggle { min-height: 51px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 2px; border-top: 1px solid var(--line-soft); }
+.weixin-settings-toggle > span { display: flex; flex-direction: column; }
+.weixin-settings-toggle strong { font-size: 11.5px; font-weight: 590; }
+.weixin-settings-toggle small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.weixin-settings-action { width: 100%; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 9px; border-radius: 7px; color: var(--muted); text-align: left; font-size: 11.5px; }
+.weixin-settings-action:hover { color: var(--ink); background: var(--line-soft); }
+.weixin-settings-danger { margin-top: 7px; padding: 10px; border: 1px solid color-mix(in srgb, var(--danger) 20%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 4%, var(--surface)); }
+.weixin-settings-danger label { color: var(--danger); font-size: 11.5px; font-weight: 590; }
+.weixin-settings-danger p { margin: 3px 0 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.weixin-settings-danger input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: var(--canvas); font-size: 11px; }
+.weixin-settings-danger input:focus { border-color: color-mix(in srgb, var(--focus) 58%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 9%, transparent); }
+.weixin-settings-danger button { width: 100%; height: 31px; margin-top: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); font-size: 11px; }
+.weixin-settings-danger button:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.weixin-message-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.weixin-messages { width: min(100%, 820px); min-height: 100%; margin: 0 auto; padding: 35px 32px 230px; }
+.weixin-load-more { display: block; margin: 0 auto 26px; padding: 7px 10px; border-radius: 7px; color: var(--muted); background: var(--line-soft); font-size: 11px; }
+.weixin-chat-empty { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--faint); }
+.weixin-chat-empty strong { color: var(--muted); font-size: 14px; }
+.weixin-message { max-width: 82%; margin: 0 0 25px; line-height: 1.55; }
+.weixin-message > small { display: block; margin-bottom: 5px; color: var(--faint); font-size: 9.5px; }
+.weixin-message > p { margin: 0; white-space: pre-wrap; }
+.weixin-user-message { width: fit-content; margin-left: auto; padding: 10px 13px; border: 1px solid var(--line); border-radius: 13px 13px 4px 13px; background: var(--surface); }
+.weixin-user-message > small { text-align: right; }
+.weixin-agent-message { max-width: 92%; }
+.weixin-system-message { max-width: 100%; padding: 9px 11px; border-left: 3px solid var(--danger); border-radius: 4px 8px 8px 4px; background: color-mix(in srgb, var(--danger) 6%, var(--surface)); color: var(--muted); }
+.weixin-media-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.weixin-media-list span { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); }
+.weixin-media-list strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 560; }
+.weixin-media-list em { margin-left: auto; color: var(--faint); font-size: 9px; font-style: normal; }
+.weixin-composer-wrap { z-index: 22; }
+.weixin-prompt-editor { resize: none; }
+.weixin-prompt-editor::placeholder { color: var(--faint); }
+.weixin-attachment-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 2px 3px 7px; }
+.weixin-attachment-list > span { max-width: 220px; display: flex; align-items: center; gap: 5px; padding: 5px 5px 5px 7px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--line-soft); font-size: 10px; }
+.weixin-attachment-list > span > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weixin-attachment-list button { display: grid; place-items: center; color: var(--faint); }
+.weixin-error { position: absolute; z-index: 30; left: 50%; bottom: 165px; transform: translateX(-50%); width: min(620px, calc(100% - 40px)); display: flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 9px; background: var(--surface); color: var(--danger); box-shadow: var(--shadow); }
+.weixin-error span { flex: 1; }
+.working-line { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 .thread-header { height: 56px; min-height: 56px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; justify-content: space-between; padding: 8px 15px; -webkit-app-region: drag; }
 .thread-header button { -webkit-app-region: no-drag; }
 .platform-macos.sidebar-is-collapsed .thread-header { padding-left: 86px; }
@@ -886,6 +953,7 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
   .messages { padding-top: 38px; }
   .composer-wrap { padding-left: 15px; padding-right: 15px; }
   .model-menu { right: 174px; }
+  .weixin-settings-panel { right: -34px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

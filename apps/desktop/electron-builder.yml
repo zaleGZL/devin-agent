@@ -9,6 +9,8 @@ directories:
 files:
   - dist/**/*
   - dist-electron/**/*
+  - src/main/weixin/LICENSE.tencent-weixin
+  - build/icon.png
   - LICENSE
   - package.json
   - "!**/*.map"
