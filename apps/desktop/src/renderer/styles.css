@@ -82,27 +82,28 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .pinned-label { height: 24px; padding: 0 7px; display: flex; align-items: center; }
 .pinned-task-list { margin: 1px 0 14px; display: flex; flex-direction: column; gap: 1px; }
 .section-label.recent-label { margin-top: 14px; }
-.project-group { margin: 0; }
+.project-group { margin: 1px 0 2px; }
 .project-row-shell { position: relative; display: flex; align-items: center; border-radius: 6px; transition: background-color .12s ease, opacity .12s ease; }
 .project-row-shell:hover { background: var(--tree-hover); }
 .project-row-shell.active { background: var(--tree-selected); }
-.project-row { width: 100%; height: 30px; padding: 0 62px 0 28px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; }
+.project-row { width: 100%; height: 30px; padding: 0 62px 0 8px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; }
 .project-row svg { flex: none; stroke-width: 1.65; }
-.project-row strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
+.project-row strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 560; }
 .project-new-thread, .project-more-action { position: absolute; top: 50%; width: 24px; height: 24px; transform: translateY(-50%); display: grid; place-items: center; border-radius: 5px; color: var(--tree-muted); opacity: 0; }
 .project-new-thread { right: 4px; }
 .project-more-action { right: 30px; }
 .project-row-shell:hover .project-new-thread, .project-row-shell:focus-within .project-new-thread, .project-row-shell:hover .project-more-action, .project-row-shell:focus-within .project-more-action { opacity: 1; }
 .project-new-thread:hover, .project-more-action:hover { color: var(--tree-ink); background: color-mix(in srgb, var(--tree-ink) 8%, transparent); }
 .project-new-thread:focus-visible, .project-more-action:focus-visible { opacity: 1; outline-color: color-mix(in srgb, var(--focus) 75%, transparent); outline-offset: -2px; }
-.project-task-list { margin: 1px 0 4px; display: flex; flex-direction: column; gap: 1px; }
+.project-task-list { margin: 1px 0 5px 15px; padding-left: 14px; display: flex; flex-direction: column; gap: 1px; border-left: 1px solid color-mix(in srgb, var(--tree-muted) 34%, transparent); }
 .project-task-item, .recent-task-item { position: relative; display: flex; align-items: center; border-radius: 6px; transition: background-color .12s ease, opacity .12s ease; }
+.project-task-list > *::before { content: ""; position: absolute; left: -14px; top: 50%; width: 10px; border-top: 1px solid color-mix(in srgb, var(--tree-muted) 34%, transparent); pointer-events: none; }
 .project-task-item:hover, .recent-task-item:hover { background: var(--tree-hover); }
 .project-task-item.active, .recent-task-item.active { background: var(--tree-selected); }
-.project-task-row { width: 100%; height: 32px; padding: 0 34px 0 32px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; }
+.project-task-row { width: 100%; height: 32px; padding: 0 34px 0 14px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; }
 .project-task-row > span:first-child { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 430; }
-.project-task-empty { padding: 4px 8px 6px 32px; color: var(--tree-muted); font-size: 12px; line-height: 1.45; }
-.project-task-more { width: 100%; height: 30px; padding: 0 8px 0 32px; border-radius: 6px; color: var(--tree-muted); font-size: 12px; text-align: left; }
+.project-task-empty { position: relative; padding: 4px 8px 6px 14px; color: var(--tree-muted); font-size: 12px; line-height: 1.45; }
+.project-task-more { position: relative; width: 100%; height: 30px; padding: 0 8px 0 14px; border-radius: 6px; color: var(--tree-muted); font-size: 12px; text-align: left; }
 .project-task-more:hover { background: var(--tree-hover); color: var(--tree-ink); }
 .thread-row { width: 100%; height: 34px; min-height: 34px; padding: 4px 7px; overflow: hidden; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; margin: 0; }
 .thread-row:hover { background: var(--tree-hover); }
@@ -111,7 +112,7 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .thread-copy strong { min-width: 0; flex: 1; font-size: 12.5px; font-weight: 480; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .thread-more { opacity: 0; }
 .thread-row:hover .thread-more { opacity: 1; }
-.pinned-task-row, .recent-task-row { padding: 4px 34px 4px 28px; }
+.pinned-task-row, .recent-task-row { padding: 4px 34px 4px 7px; }
 .project-task-item.has-session-indicator .project-task-row, .recent-task-item.has-session-indicator .thread-row { padding-right: 55px; }
 .session-row-status { position: absolute; right: 34px; top: 50%; transform: translateY(-50%); flex: none; color: var(--tree-muted); pointer-events: none; }
 .session-row-status.spin { animation: session-spin .9s linear infinite; }
@@ -119,17 +120,15 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .session-more-action { position: absolute; right: 5px; top: 50%; width: 24px; height: 24px; transform: translateY(-50%); display: grid; place-items: center; border-radius: 6px; color: var(--tree-muted); opacity: 0; pointer-events: none; transition: opacity .12s ease, color .12s ease, background .12s ease; }
 .project-task-item:hover .session-more-action, .project-task-item:focus-within .session-more-action, .recent-task-item:hover .session-more-action, .recent-task-item:focus-within .session-more-action { opacity: 1; pointer-events: auto; }
 .session-more-action:hover, .session-more-action:focus-visible { color: var(--tree-ink); background: color-mix(in srgb, var(--tree-ink) 8%, transparent); }
-.sidebar-drag-handle { position: absolute; z-index: 2; left: 4px; top: 50%; width: 20px; height: 26px; transform: translateY(-50%); display: grid; place-items: center; border-radius: 5px; color: var(--tree-muted); cursor: grab; opacity: 0; touch-action: none; transition: opacity .12s ease, color .12s ease, background-color .12s ease; }
-.project-row-shell:hover .sidebar-drag-handle, .project-row-shell:focus-within .sidebar-drag-handle, .project-task-item:hover .sidebar-drag-handle, .project-task-item:focus-within .sidebar-drag-handle, .recent-task-item:hover .sidebar-drag-handle, .recent-task-item:focus-within .sidebar-drag-handle, .sidebar-drag-handle:focus-visible, .sidebar-is-dragging .sidebar-drag-handle { opacity: 1; }
-.sidebar-drag-handle:hover, .sidebar-drag-handle:focus-visible { color: var(--tree-ink); background: color-mix(in srgb, var(--tree-ink) 8%, transparent); }
-.sidebar-drag-handle[draggable="false"] { opacity: 0; pointer-events: none; }
+.project-row-shell[draggable="true"], .project-task-item[draggable="true"], .recent-task-item[draggable="true"],
+.project-row-shell[draggable="true"] > .project-row, .project-task-item[draggable="true"] > .project-task-row, .recent-task-item[draggable="true"] > .thread-row { cursor: grab; }
 .project-row-shell.dragging, .project-task-item.dragging, .recent-task-item.dragging { background: color-mix(in srgb, var(--focus) 12%, var(--tree-selected)); opacity: .56; }
 .sidebar-is-dragging .thread-list, .sidebar-is-dragging .thread-list * { cursor: grabbing !important; user-select: none; }
 .session-rename-input { height: 26px; min-width: 0; border: 1px solid color-mix(in srgb, var(--focus) 70%, var(--line)); border-radius: 6px; outline: 0; background: var(--surface); color: var(--tree-ink); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 11%, transparent); font-size: 12.5px; }
-.project-session-rename { width: calc(100% - 63px); margin: 3px 55px 3px 29px; padding: 0 5px; }
-.pinned-session-rename { width: calc(100% - 82px); margin: 4px 55px 4px 27px; padding: 0 5px; }
-.recent-session-rename { width: calc(100% - 82px); margin: 4px 55px 4px 27px; padding: 0 5px; }
-.project-rename-input { width: calc(100% - 90px); margin: 2px 62px 2px 28px; padding: 0 6px; font-size: 13px; }
+.project-session-rename { width: calc(100% - 63px); margin: 3px 55px 3px 8px; padding: 0 5px; }
+.pinned-session-rename { width: calc(100% - 63px); margin: 4px 55px 4px 8px; padding: 0 5px; }
+.recent-session-rename { width: calc(100% - 63px); margin: 4px 55px 4px 8px; padding: 0 5px; }
+.project-rename-input { width: calc(100% - 70px); margin: 2px 62px 2px 8px; padding: 0 6px; font-size: 13px; }
 .session-menu-backdrop { position: fixed; z-index: 180; inset: 0; }
 .session-action-menu { position: fixed; z-index: 181; width: 176px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 12px 34px rgba(20, 20, 18, .18), 0 2px 8px rgba(20, 20, 18, .08); }
 .session-action-menu > button { width: 100%; height: 34px; padding: 0 8px; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 7px; border-radius: 7px; color: var(--ink); text-align: left; }
