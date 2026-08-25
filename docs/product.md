@@ -25,6 +25,8 @@ Devin behavior.
 - ACP runtime responses are the authority for feature availability. Unsupported features remain absent
   or visibly unavailable rather than being simulated.
 - Multiple UI sessions may share one runtime host, but Devin remains the transcript source of truth.
+- The desktop does not impose a minimum window size; resizing remains subject only to the operating
+  system and window manager.
 - Local metadata such as pinning, order, archive state, and local title overrides is explicitly
   distinguished from server-confirmed session state.
 - Security boundaries do not weaken for convenience: renderer isolation, path scoping, safe navigation,
