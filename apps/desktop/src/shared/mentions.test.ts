@@ -20,14 +20,5 @@ describe("mention shared boundaries", () => {
       { id: "a", kind: "skill", label: "A", command: "agents:a" },
       { id: "b", kind: "skill", label: "B", command: "agents:b" },
     ])).toThrow(/one Skill/i);
-    expect(() => parseMentionRefs([
-      {
-        id: "conflict",
-        kind: "skill",
-        label: "Conflict",
-        command: "conflict",
-        conflictingSources: Array.from({ length: 33 }, (_, index) => `/skill-${index}`),
-      },
-    ])).toThrow(/invalid mention/i);
   });
 });

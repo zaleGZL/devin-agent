@@ -20,7 +20,6 @@ export const PROJECT_SKILL_ROOTS = [
 
 export const GLOBAL_SKILL_ROOTS = [
   ".agents/skills",
-  ".codex/skills",
   ".config/devin/skills",
   ".codeium/windsurf/skills",
   ".codeium/windsurf-next/skills",
@@ -92,11 +91,7 @@ export class SkillIndex {
         "project",
         (relativePath) => relativePath,
       );
-      for (const skill of project) {
-        const key = normalizeSkillName(skill.command);
-        const existing = merged.get(key);
-        merged.set(key, existing ? mergeSkillConflict(skill, existing) : skill);
-      }
+      for (const skill of project) merged.set(normalizeSkillName(skill.command), skill);
     }
     return freezeSkills([...merged.values()].sort((left, right) => left.label.localeCompare(right.label)));
   }
@@ -134,8 +129,9 @@ export async function scanSkillRoots(
       const command = normalizeSkillCommand(entry.name);
       if (!command) continue;
       const key = normalizeSkillName(command);
+      if (found.has(key)) continue;
       const relativeFile = path.posix.join(root, entry.name, "SKILL.md");
-      const skill: SkillMentionRef = {
+      found.set(key, {
         id: `skill:${key}`,
         kind: "skill",
         command,
@@ -143,24 +139,10 @@ export async function scanSkillRoots(
         ...(metadata.description ? { description: metadata.description } : {}),
         scope,
         source: displayPath(relativeFile),
-      };
-      const existing = found.get(key);
-      found.set(key, existing ? mergeSkillConflict(existing, skill) : skill);
+      });
     }
   }
   return [...found.values()];
-}
-
-function mergeSkillConflict(preferred: SkillMentionRef, shadowed: SkillMentionRef): SkillMentionRef {
-  const conflictingSources = [
-    shadowed.source,
-    ...(shadowed.conflictingSources ?? []),
-    ...(preferred.conflictingSources ?? []),
-  ].filter((source): source is string => Boolean(source) && source !== preferred.source);
-  return {
-    ...preferred,
-    conflictingSources: [...new Set(conflictingSources)],
-  };
 }
 
 export async function readSkillMetadata(filePath: string): Promise<{ name?: string; description?: string }> {
@@ -222,10 +204,5 @@ function cacheKey(workspaceRoot?: string): string {
 }
 
 function freezeSkills(skills: readonly SkillMentionRef[]): readonly SkillMentionRef[] {
-  return Object.freeze(skills.map((skill) => Object.freeze({
-    ...skill,
-    ...(skill.conflictingSources
-      ? { conflictingSources: Object.freeze([...skill.conflictingSources]) }
-      : {}),
-  })));
+  return Object.freeze(skills.map((skill) => Object.freeze({ ...skill })));
 }

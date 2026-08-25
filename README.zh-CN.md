@@ -40,8 +40,6 @@ macOS 安装方法见下文。
 ### 输入框 `@` 引用
 
 在输入框键入 `@` 可引用**文件**、**目录**或 **Skills**。
-Skill 选择器会发现仓库中的 `.agents/skills`、`.codex/skills`，以及用户目录中的
-`~/.agents/skills`、`~/.codex/skills`。同名调用会显示为冲突；重命名或移除其中一份定义前不可选择。
 
 ## 前置条件
 
