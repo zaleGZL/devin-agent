@@ -589,8 +589,6 @@ function createWindow(options: { sessionId?: string; title?: string; background?
     height: windowHeight,
     x: windowX,
     y: windowY,
-    minWidth: 900,
-    minHeight: 640,
     show: false,
     backgroundColor: "#f7f7f5",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
