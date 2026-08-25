@@ -3,7 +3,7 @@ import type {
   RefObject, SetStateAction,
 } from "react";
 import {
-  Bot, ChevronRight, Ellipsis, Folder, FolderOpen, GripVertical, LoaderCircle,
+  Bot, ChevronRight, Ellipsis, Folder, FolderOpen, LoaderCircle,
   PanelLeft, Plus, Search, SquarePen,
 } from "lucide-react";
 import type { SessionSummary, UserProfile, WeixinBotStatus, WorkspaceItem } from "../../../shared/types";
@@ -124,24 +124,13 @@ export function AppSidebar(props: AppSidebarProps) {
                   <div
                     key={session.path}
                     className={`recent-task-item pinned-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                    draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
                     onContextMenu={(event) => openSessionMenu(event, session)}
+                    onDragStart={(event) => startSessionDrag(event, session, "pinned")}
+                    onDragEnd={cancelSidebarDrag}
                     onDragOver={(event) => dragSessionOver(event, session.id, "pinned")}
                     onDrop={(event) => void finishSidebarDrag(event)}
                   >
-                    <button
-                      type="button"
-                      className="sidebar-drag-handle session-drag-handle"
-                      draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
-                      disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
-                      onClick={(event) => event.stopPropagation()}
-                      onDragStart={(event) => startSessionDrag(event, session, "pinned")}
-                      onDragEnd={cancelSidebarDrag}
-                      onKeyDown={(event) => void moveSessionByKeyboard(event, session, "pinned")}
-                      aria-label={t("session.drag", { title: session.title })}
-                      title={t("session.drag", { title: session.title })}
-                    >
-                      <GripVertical size={13} />
-                    </button>
                     {renamingSessionId === session.id ? (
                       <input
                         ref={sessionRenameInputRef}
@@ -161,8 +150,10 @@ export function AppSidebar(props: AppSidebarProps) {
                       <button
                         className="thread-row pinned-task-row"
                         onClick={() => void openSession(session)}
+                        onKeyDown={(event) => void moveSessionByKeyboard(event, session, "pinned")}
                         title={session.title}
                         aria-current={session.path === selectedThreadPath ? "page" : undefined}
+                        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
                       >
                         <span className="thread-copy"><strong>{session.title}</strong></span>
                       </button>
@@ -209,24 +200,13 @@ export function AppSidebar(props: AppSidebarProps) {
                 <div className="project-group" key={item.path}>
                   <div
                     className={`project-row-shell${projectIsActive ? " active" : ""}${sidebarDrag?.kind === "project" && sidebarDrag.id === item.path ? " dragging" : ""}`}
+                    draggable={!sessionQuery.trim() && renamingProjectPath !== item.path}
                     onContextMenu={(event) => openProjectMenu(event, item)}
+                    onDragStart={(event) => startProjectDrag(event, item)}
+                    onDragEnd={cancelSidebarDrag}
                     onDragOver={(event) => dragProjectOver(event, item.path)}
                     onDrop={(event) => void finishSidebarDrag(event)}
                   >
-                    <button
-                      type="button"
-                      className="sidebar-drag-handle project-drag-handle"
-                      draggable={!sessionQuery.trim() && renamingProjectPath !== item.path}
-                      disabled={Boolean(sessionQuery.trim()) || renamingProjectPath === item.path}
-                      onClick={(event) => event.stopPropagation()}
-                      onDragStart={(event) => startProjectDrag(event, item)}
-                      onDragEnd={cancelSidebarDrag}
-                      onKeyDown={(event) => void moveProjectByKeyboard(event, item)}
-                      aria-label={t("sidebar.dragProject", { project: item.name })}
-                      title={t("sidebar.dragProject", { project: item.name })}
-                    >
-                      <GripVertical size={13} />
-                    </button>
                     {renamingProjectPath === item.path ? (
                       <input
                         ref={projectRenameInputRef}
@@ -246,8 +226,10 @@ export function AppSidebar(props: AppSidebarProps) {
                       <button
                         className="project-row"
                         onClick={() => toggleWorkspace(item)}
+                        onKeyDown={(event) => void moveProjectByKeyboard(event, item)}
                         title={item.path}
                         aria-expanded={isExpanded}
+                        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
                       >
                         {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
                         <strong>{item.name}</strong>
@@ -274,30 +256,19 @@ export function AppSidebar(props: AppSidebarProps) {
                     </button>
                   </div>
                   {isExpanded && (
-                    <div className="project-task-list">
+                    <div className="project-task-list" role="group" aria-label={item.name}>
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
                       {visibleTasks.map((session) => (
                         <div
                           key={session.path}
                           className={`project-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                          draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
                           onContextMenu={(event) => openSessionMenu(event, session)}
+                          onDragStart={(event) => startSessionDrag(event, session, `project:${item.path}`)}
+                          onDragEnd={cancelSidebarDrag}
                           onDragOver={(event) => dragSessionOver(event, session.id, `project:${item.path}`)}
                           onDrop={(event) => void finishSidebarDrag(event)}
                         >
-                          <button
-                            type="button"
-                            className="sidebar-drag-handle session-drag-handle"
-                            draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
-                            disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
-                            onClick={(event) => event.stopPropagation()}
-                            onDragStart={(event) => startSessionDrag(event, session, `project:${item.path}`)}
-                            onDragEnd={cancelSidebarDrag}
-                            onKeyDown={(event) => void moveSessionByKeyboard(event, session, `project:${item.path}`)}
-                            aria-label={t("session.drag", { title: session.title })}
-                            title={t("session.drag", { title: session.title })}
-                          >
-                            <GripVertical size={13} />
-                          </button>
                           {renamingSessionId === session.id ? (
                             <input
                               ref={sessionRenameInputRef}
@@ -317,8 +288,10 @@ export function AppSidebar(props: AppSidebarProps) {
                             <button
                               className="project-task-row"
                               onClick={() => void openSession(session)}
+                              onKeyDown={(event) => void moveSessionByKeyboard(event, session, `project:${item.path}`)}
                               title={session.title}
                               aria-current={session.path === selectedThreadPath ? "page" : undefined}
+                              aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
                             >
                               <span>{session.title}</span>
                             </button>
@@ -370,24 +343,13 @@ export function AppSidebar(props: AppSidebarProps) {
               <div
                 key={session.path}
                 className={`recent-task-item${session.path === selectedThreadPath ? " active" : ""}${runningSessionIds.has(session.path) || unreadSessionIds.has(session.path) ? " has-session-indicator" : ""}${sidebarDrag?.kind === "session" && sidebarDrag.id === session.id ? " dragging" : ""}`}
+                draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
                 onContextMenu={(event) => openSessionMenu(event, session)}
+                onDragStart={(event) => startSessionDrag(event, session, "recent")}
+                onDragEnd={cancelSidebarDrag}
                 onDragOver={(event) => dragSessionOver(event, session.id, "recent")}
                 onDrop={(event) => void finishSidebarDrag(event)}
               >
-                <button
-                  type="button"
-                  className="sidebar-drag-handle session-drag-handle"
-                  draggable={!sessionQuery.trim() && renamingSessionId !== session.id}
-                  disabled={Boolean(sessionQuery.trim()) || renamingSessionId === session.id}
-                  onClick={(event) => event.stopPropagation()}
-                  onDragStart={(event) => startSessionDrag(event, session, "recent")}
-                  onDragEnd={cancelSidebarDrag}
-                  onKeyDown={(event) => void moveSessionByKeyboard(event, session, "recent")}
-                  aria-label={t("session.drag", { title: session.title })}
-                  title={t("session.drag", { title: session.title })}
-                >
-                  <GripVertical size={13} />
-                </button>
                 {renamingSessionId === session.id ? (
                   <input
                     ref={sessionRenameInputRef}
@@ -404,7 +366,13 @@ export function AppSidebar(props: AppSidebarProps) {
                     }}
                   />
                 ) : (
-                  <button className="thread-row recent-task-row" onClick={() => void openSession(session)} title={session.title}>
+                  <button
+                    className="thread-row recent-task-row"
+                    onClick={() => void openSession(session)}
+                    onKeyDown={(event) => void moveSessionByKeyboard(event, session, "recent")}
+                    title={session.title}
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                  >
                     <span className="thread-copy"><strong>{session.title}</strong></span>
                   </button>
                 )}
