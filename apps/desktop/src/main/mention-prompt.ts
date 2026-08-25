@@ -90,8 +90,5 @@ function canonicalSkillCommand(command: string, availableSkills: readonly SkillM
   const normalized = command.trim().replace(/^@skills:/i, "").replace(/^\//, "").toLocaleLowerCase();
   const matched = availableSkills.find((skill) => skill.command.toLocaleLowerCase() === normalized);
   if (!matched) throw new Error("This Skill is not available in the active Devin session snapshot");
-  if (matched.conflictingSources?.length) {
-    throw new Error(`Skill command "${matched.command}" is ambiguous; rename or remove one of its duplicate definitions`);
-  }
   return `@skills:${matched.command}`;
 }

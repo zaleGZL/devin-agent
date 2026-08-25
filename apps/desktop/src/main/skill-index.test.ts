@@ -34,7 +34,7 @@ describe("SkillIndex", () => {
     });
   });
 
-  it("discovers all project roots, prefers project definitions and surfaces duplicate sources", async () => {
+  it("discovers all project roots and lets project Skills override global names", async () => {
     const home = await temporaryRoot("devin-skills-home-");
     const project = await temporaryRoot("devin-skills-project-");
     await writeSkill(home, ".agents/skills", "review", "review", "global");
@@ -43,34 +43,14 @@ describe("SkillIndex", () => {
     const skills = await new SkillIndex(home).listDraft(project);
     expect(skills.filter((skill) => skill.command.startsWith("skill-"))).toHaveLength(PROJECT_SKILL_ROOTS.length);
     expect(skills.find((skill) => skill.command === "skill-0")?.label).toBe("project-0");
-    const review = skills.find((skill) => skill.command === "review");
-    expect(review).toEqual(expect.objectContaining({
+    expect(skills.find((skill) => skill.command === "review")).toEqual(expect.objectContaining({
       description: "project",
       scope: "project",
       source: ".codex/skills/review/SKILL.md",
-      conflictingSources: ["~/.agents/skills/review/SKILL.md"],
     }));
-    expect(Object.isFrozen(review?.conflictingSources)).toBe(true);
   });
 
-  it("discovers Agent and Codex Skills from project and user scopes", async () => {
-    const home = await temporaryRoot("devin-skills-home-");
-    const project = await temporaryRoot("devin-skills-project-");
-    await writeSkill(home, ".agents/skills", "user-agent", "user-agent");
-    await writeSkill(home, ".codex/skills", "user-codex", "user-codex");
-    await writeSkill(project, ".agents/skills", "project-agent", "project-agent");
-    await writeSkill(project, ".codex/skills", "project-codex", "project-codex");
-
-    const skills = await new SkillIndex(home).listDraft(project);
-    expect(skills).toEqual(expect.arrayContaining([
-      expect.objectContaining({ command: "user-agent", scope: "global", source: "~/.agents/skills/user-agent/SKILL.md" }),
-      expect.objectContaining({ command: "user-codex", scope: "global", source: "~/.codex/skills/user-codex/SKILL.md" }),
-      expect.objectContaining({ command: "project-agent", scope: "project", source: ".agents/skills/project-agent/SKILL.md" }),
-      expect.objectContaining({ command: "project-codex", scope: "project", source: ".codex/skills/project-codex/SKILL.md" }),
-    ]));
-  });
-
-  it("discovers all configured global roots and uses the folder as the command", async () => {
+  it("discovers only Devin-supported global roots and uses the folder as the command", async () => {
     const home = await temporaryRoot("devin-skills-home-");
     await Promise.all(GLOBAL_SKILL_ROOTS.map((root, index) => writeSkill(home, root, `global-${index}`, `Global Skill ${index}`)));
     await writeSkill(home, ".claude/skills", "not-global", "Not Global");
