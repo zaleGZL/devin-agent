@@ -106,12 +106,11 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
     const editor = editorRef.current;
     if (!editor) return;
     const current = readInlineMentionEditor(editor, mentions);
-    const mentionStateMatches = current.mentions.length === mentions.length
-      && current.mentions.every((mention, index) => {
-        const expected = mentions[index];
-        return expected?.id === mention.id && expected.start === mention.start && expected.end === mention.end;
-      });
-    const needsRender = current.value !== value || !mentionStateMatches;
+    const renderedMentionIds = Array.from(
+      editor.querySelectorAll<HTMLElement>("[data-mention-id]"),
+      (element) => element.dataset.mentionId,
+    ).filter((id): id is string => Boolean(id));
+    const needsRender = inlineMentionEditorNeedsRender(current, renderedMentionIds, value, mentions);
     if (needsRender) {
       renderInlineMentionEditor(editor, value, mentions);
       if (pendingCaret.current !== undefined) setEditorCaret(editor, pendingCaret.current);
@@ -193,6 +192,22 @@ export const InlineMentionEditor = forwardRef<InlineMentionEditorHandle, InlineM
     />
   );
 });
+
+export function inlineMentionEditorNeedsRender(
+  current: { value: string; mentions: readonly PositionedMention[] },
+  renderedMentionIds: readonly string[],
+  value: string,
+  mentions: readonly PositionedMention[],
+): boolean {
+  if (current.value !== value || renderedMentionIds.length !== mentions.length) return true;
+  return mentions.some((expected, index) => {
+    const positioned = current.mentions[index];
+    return renderedMentionIds[index] !== expected.id
+      || positioned?.id !== expected.id
+      || positioned.start !== expected.start
+      || positioned.end !== expected.end;
+  });
+}
 
 function readInlineMentionEditor(
   editor: HTMLDivElement,
