@@ -85,6 +85,66 @@ export interface WeixinHistoryPage {
 export type WeixinBotEvent =
   | { type: "status"; status: WeixinBotStatus }
   | { type: "message"; message: WeixinMessage }
+  | { type: "thought"; text: string; phase: "start" | "update" | "end" }
+  | { type: "history-reset" };
+
+export type TelegramConnectionState =
+  | "unconfigured"
+  | "workspace-ready"
+  | "token-required"
+  | "connecting"
+  | "online"
+  | "paused"
+  | "error";
+
+export interface TelegramMedia {
+  kind: "image" | "voice" | "file" | "video";
+  name: string;
+  mimeType: string;
+  size: number;
+  localPath?: string;
+}
+
+export interface TelegramMessage {
+  id: number;
+  platformId?: string;
+  direction: "inbound" | "outbound";
+  source: "telegram" | "desktop" | "agent" | "system";
+  role: "user" | "assistant" | "system";
+  text: string;
+  media: TelegramMedia[];
+  status: "pending" | "processing" | "sent" | "failed";
+  createdAt: string;
+}
+
+export interface TelegramBotStatus {
+  state: TelegramConnectionState;
+  workspacePath?: string;
+  sessionId?: string;
+  botId?: number;
+  boundChatId?: number;
+  online: boolean;
+  autoLaunch: boolean;
+  running: boolean;
+  lastError?: string;
+  contextUsage?: AgentSessionStats["contextUsage"];
+  mediaBytes: number;
+  modelId?: string;
+  modeId?: string;
+  models: Array<{ provider?: string; id: string; name?: string; description?: string; contextWindow?: number; reasoning?: boolean; supportsImages?: boolean }>;
+  modes: NonNullable<AgentSnapshot["modes"]>;
+}
+
+export interface TelegramHistoryPage {
+  messages: TelegramMessage[];
+  hasMore: boolean;
+  before?: number;
+}
+
+export type TelegramBotEvent =
+  | { type: "status"; status: TelegramBotStatus }
+  | { type: "message"; message: TelegramMessage }
+  | { type: "thought"; text: string; phase: "start" | "update" | "end" }
   | { type: "history-reset" };
 
 export interface WorkspaceItem {
@@ -355,6 +415,24 @@ export interface DesktopApi {
     setAutoLaunch(enabled: boolean): Promise<void>;
     clearAllData(confirmation: string): Promise<void>;
     onEvent(listener: (event: WeixinBotEvent) => void): () => void;
+  };
+  telegram: {
+    getStatus(): Promise<TelegramBotStatus>;
+    chooseWorkspace(): Promise<string | null>;
+    configureWorkspace(path: string): Promise<void>;
+    chooseAttachments(): Promise<string[]>;
+    saveToken(token: string): Promise<void>;
+    start(): Promise<void>;
+    pause(): Promise<void>;
+    disconnect(): Promise<void>;
+    getHistory(query?: { before?: number; limit?: number }): Promise<TelegramHistoryPage>;
+    send(input: { text: string; attachmentPaths?: string[] }): Promise<void>;
+    abortTurn(): Promise<void>;
+    setModel(modelId: string): Promise<void>;
+    setMode(modeId: string): Promise<void>;
+    setAutoLaunch(enabled: boolean): Promise<void>;
+    clearAllData(confirmation: string): Promise<void>;
+    onEvent(listener: (event: TelegramBotEvent) => void): () => void;
   };
   onAppCommand?(listener: (command: string) => void): () => void;
 }

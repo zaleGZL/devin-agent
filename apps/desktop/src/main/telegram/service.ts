@@ -1,33 +1,37 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import QRCode from "qrcode";
 import type {
   AgentSessionStats,
-  WeixinBotEvent,
-  WeixinBotStatus,
-  WeixinHistoryPage,
-  WeixinLoginSession,
-  WeixinLoginState,
-  WeixinMedia,
-  WeixinMessage,
+  AgentSnapshot,
+  TelegramBotEvent,
+  TelegramBotStatus,
+  TelegramHistoryPage,
+  TelegramMedia,
+  TelegramMessage,
 } from "../../shared/types";
 import type { JsonObject, PermissionDecision, PermissionRequest, PromptContent } from "../../shared/acp-types";
 import { buildAgentSnapshot } from "../runtime-adapter";
 import type { AppSettings } from "../app-settings";
 import { DevinAcpHost, type AcpUpdateEvent } from "../devin-acp-host";
-import { MessageItemType, WeixinApi, WeixinLoginManager, type ILinkMessage } from "./protocol";
-import { WeixinSecrets } from "./secrets";
-import { safeFileName, WeixinStore, type WeixinOutboxPayload } from "./store";
+import {
+  generateClientId,
+  isImageFile,
+  mediaKind,
+  redactToken,
+  TelegramApi,
+  type TelegramMessage as ApiMessage,
+  type TelegramUpdate,
+} from "./protocol";
+import { TelegramSecrets } from "./secrets";
+import { safeFileName, TelegramStore, type StoredTelegramBotState, type TelegramOutboxPayload } from "./store";
 
-const CLEAR_CONFIRMATION = "清除微信 Bot 数据";
-const WORKSPACE_MEDIA_DIRECTORY = path.join(".devin-agent", "weixin");
+const CLEAR_CONFIRMATION = "清除 Telegram Bot 数据";
+const WORKSPACE_MEDIA_DIRECTORY = path.join(".devin-agent", "telegram");
 
-export class WeixinBotService {
-  readonly store: WeixinStore;
-  private readonly secrets: WeixinSecrets;
-  private readonly login = new WeixinLoginManager();
-  private api?: WeixinApi;
+export class TelegramBotService {
+  readonly store: TelegramStore;
+  private readonly secrets: TelegramSecrets;
+  private api?: TelegramApi;
   private pollAbort?: AbortController;
   private pollPromise?: Promise<void>;
   private agent?: DevinAcpHost;
@@ -39,37 +43,81 @@ export class WeixinBotService {
   private contextUsage?: AgentSessionStats["contextUsage"];
   private modelId?: string;
   private modeId?: string;
+  private availableModels: Array<{ provider?: string; id: string; name?: string; description?: string; contextWindow?: number; reasoning?: boolean; supportsImages?: boolean }> = [];
+  private availableModes: NonNullable<AgentSnapshot["modes"]> = [];
 
   constructor(
     rootPath: string,
     private readonly appVersion: string,
     private readonly settings: AppSettings,
-    private readonly emit: (event: WeixinBotEvent) => void,
+    private readonly emit: (event: TelegramBotEvent) => void,
   ) {
-    this.store = new WeixinStore(rootPath);
-    this.secrets = new WeixinSecrets(this.store.secretsPath);
+    this.store = new TelegramStore(rootPath);
+    this.secrets = new TelegramSecrets(this.store.secretsPath);
   }
 
   async initialize(): Promise<void> {
     const state = this.store.getState();
     if (state.workspacePath) await this.validateWorkspace(state.workspacePath);
     const secret = await this.secrets.read();
-    if (state.accountId && state.userId && state.baseUrl && secret.token && !state.paused) {
+    if (state.botId != null && secret.botToken && !state.paused) {
       await this.start().catch((error) => this.recordError(error));
+      await this.preloadModelInfo().catch(() => undefined);
     } else {
       await this.emitStatus();
     }
   }
 
-  async getStatus(): Promise<WeixinBotStatus> {
+  private async preloadModelInfo(): Promise<void> {
+    const state = this.store.getState();
+    if (!state.workspacePath) return;
+    const [binaryPath, requestedModel, requestedMode] = await Promise.all([
+      this.settings.getDevinCliPath(),
+      this.settings.getNewSessionModelId(),
+      this.settings.getPreferredModeId(),
+    ]);
+    void requestedMode;
+    const host = new DevinAcpHost({
+      ...(binaryPath ? { binaryPath } : {}),
+      cwd: state.workspacePath,
+      clientName: "devin-agent-telegram",
+      clientVersion: this.appVersion,
+      clientFeatures: { elicitationForm: false, elicitationUrl: false, chains: false },
+      onUpdate: () => undefined,
+      onPermissionRequest: () => ({ outcome: { outcome: "cancelled" } }),
+      onElicitationRequest: () => ({ action: "cancel" }),
+      onStateChange: () => undefined,
+    });
+    try {
+      const capabilities = await host.start();
+      const session = state.sessionId
+        ? await host.loadSession(state.sessionId, { cwd: state.workspacePath })
+        : await host.newSession(state.workspacePath);
+      const snapshot = buildAgentSnapshot(capabilities, session, requestedModel ?? undefined);
+      const currentModel = snapshot.state.model as { id?: string } | undefined;
+      this.modelId = currentModel?.id;
+      this.modeId = typeof snapshot.state.modeId === "string" ? snapshot.state.modeId : undefined;
+      this.availableModels = snapshot.models;
+      this.availableModes = snapshot.modes ?? [];
+      await this.emitStatus();
+    } finally {
+      await host.stop().catch(() => undefined);
+    }
+  }
+
+  async getStatus(): Promise<TelegramBotStatus> {
     const state = this.store.getState();
     const secret = await this.secrets.read();
+    return this.buildStatus(state, secret);
+  }
+
+  private buildStatus(state: StoredTelegramBotState, secret: { botToken?: string }): TelegramBotStatus {
     const configured = Boolean(state.workspacePath);
-    const hasLogin = Boolean(state.accountId && state.userId && state.baseUrl && secret.token);
+    const hasLogin = Boolean(state.botId != null && secret.botToken);
     const connectionState = !configured
       ? "unconfigured"
       : !hasLogin
-        ? (state.accountId ? "login-required" : "workspace-ready")
+        ? "token-required"
         : state.lastError
           ? "error"
           : this.api
@@ -81,8 +129,8 @@ export class WeixinBotService {
       state: connectionState,
       ...(state.workspacePath ? { workspacePath: state.workspacePath } : {}),
       ...(state.sessionId ? { sessionId: state.sessionId } : {}),
-      ...(state.accountId ? { accountId: state.accountId } : {}),
-      ...(state.userId ? { boundUserId: state.userId } : {}),
+      ...(state.botId != null ? { botId: state.botId } : {}),
+      ...(state.chatId != null ? { boundChatId: state.chatId } : {}),
       online: Boolean(this.api),
       autoLaunch: state.autoLaunch,
       running: this.running,
@@ -91,6 +139,8 @@ export class WeixinBotService {
       mediaBytes: this.store.mediaBytes(),
       ...(this.modelId ? { modelId: this.modelId } : {}),
       ...(this.modeId ? { modeId: this.modeId } : {}),
+      models: this.availableModels,
+      modes: this.availableModes,
     };
   }
 
@@ -98,65 +148,36 @@ export class WeixinBotService {
     const current = this.store.getState();
     const real = await this.validateWorkspace(candidate);
     if (current.workspacePath && current.workspacePath !== real) {
-      throw new Error("工作目录已锁定。更换目录前必须清除全部微信 Bot 数据");
+      throw new Error("工作目录已锁定。更换目录前必须清除全部 Telegram Bot 数据");
     }
     this.store.patchState({ workspacePath: real, lastError: undefined });
     await this.emitStatus();
   }
 
-  async startLogin(): Promise<WeixinLoginSession> {
+  async saveToken(token: string): Promise<void> {
+    const clean = token.trim();
+    if (!clean) throw new Error("Bot Token 不能为空");
     const state = this.store.getState();
-    if (!state.workspacePath) throw new Error("请先选择微信 Bot 工作目录");
-    const old = await this.secrets.read();
-    const session = await this.login.start(old.token ? [old.token] : []);
-    return {
-      sessionId: session.id,
-      qrContent: session.qrContent,
-      qrImageDataUrl: await QRCode.toDataURL(session.qrContent, {
-        width: 280,
-        margin: 1,
-        errorCorrectionLevel: "M",
-      }),
-      expiresAt: new Date(session.expiresAt).toISOString(),
-    };
-  }
-
-  async waitLogin(sessionId: string): Promise<WeixinLoginState> {
-    const result = await this.login.poll(sessionId);
-    if (result.state !== "connected") return result;
-    const state = this.store.getState();
-    if (state.accountId && state.accountId !== result.credentials.accountId) {
-      throw new Error("该微信 Bot 与原绑定账号不一致。请先清除全部微信 Bot 数据");
-    }
-    if (state.userId && state.userId !== result.credentials.userId) {
-      throw new Error("扫码微信身份与原绑定用户不一致。请先清除全部微信 Bot 数据");
-    }
-    await this.secrets.write({ token: result.credentials.token });
-    this.store.patchState({
-      accountId: result.credentials.accountId,
-      userId: result.credentials.userId,
-      baseUrl: result.credentials.baseUrl,
-      paused: false,
-      lastError: undefined,
+    if (!state.workspacePath) throw new Error("请先选择 Telegram Bot 工作目录");
+    const api = new TelegramApi(clean, this.appVersion);
+    const me = await api.getMe().catch((error) => {
+      throw new Error(`Token 验证失败: ${errorMessage(error)}`);
     });
-    await this.start();
-    return { state: "connected", message: result.message };
-  }
-
-  submitVerifyCode(sessionId: string, code: string): void {
-    this.login.submitVerifyCode(sessionId, code);
+    await this.secrets.write({ botToken: clean });
+    this.store.patchState({ botId: me.id, lastError: undefined, paused: false });
+    await this.emitStatus();
+    await this.start().catch((error) => this.recordError(error));
   }
 
   async start(): Promise<void> {
     if (this.api) return;
     const state = this.store.getState();
     const secret = await this.secrets.read();
-    if (!state.workspacePath || !state.accountId || !state.userId || !state.baseUrl || !secret.token) {
-      throw new Error("微信 Bot 尚未完成绑定");
+    if (!state.workspacePath || state.botId == null || !secret.botToken) {
+      throw new Error("Telegram Bot 尚未完成配置");
     }
-    this.api = new WeixinApi(state.baseUrl, secret.token, this.appVersion);
+    this.api = new TelegramApi(secret.botToken, this.appVersion);
     this.store.patchState({ paused: false, lastError: undefined });
-    await this.api.notifyStart().catch(() => undefined);
     await this.recoverDurableQueues();
     this.pollAbort = new AbortController();
     this.pollPromise = this.poll(this.pollAbort.signal);
@@ -164,13 +185,11 @@ export class WeixinBotService {
   }
 
   async pause(): Promise<void> {
-    const api = this.api;
     this.api = undefined;
     this.pollAbort?.abort();
     await this.pollPromise?.catch(() => undefined);
     this.pollPromise = undefined;
     this.pollAbort = undefined;
-    await api?.notifyStop().catch(() => undefined);
     this.store.patchState({ paused: true });
     await this.emitStatus();
   }
@@ -178,11 +197,11 @@ export class WeixinBotService {
   async disconnect(): Promise<void> {
     await this.pause();
     await this.secrets.clear();
-    this.store.patchState({ paused: false, lastError: undefined });
+    this.store.patchState({ botId: undefined, chatId: undefined, paused: false, lastError: undefined });
     await this.emitStatus();
   }
 
-  history(query: { before?: number; limit?: number } = {}): WeixinHistoryPage {
+  history(query: { before?: number; limit?: number } = {}): TelegramHistoryPage {
     return this.store.history(query.before, query.limit);
   }
 
@@ -190,7 +209,7 @@ export class WeixinBotService {
     const clean = text.trim();
     if (!clean && attachmentPaths.length === 0) return;
     const state = this.store.getState();
-    if (!state.workspacePath) throw new Error("微信 Bot 尚未配置工作目录");
+    if (!state.workspacePath) throw new Error("Telegram Bot 尚未配置工作目录");
     for (const file of attachmentPaths) await this.validateWorkspaceFile(file, state.workspacePath);
     const message = this.addMessage({
       direction: "outbound",
@@ -202,7 +221,7 @@ export class WeixinBotService {
     });
     this.enqueue(async () => {
       try {
-        if (state.userId) await this.sendTextReliable(state.userId, `🖥️ 桌面指令：${clean || "请查看附件"}`);
+        if (state.chatId != null) await this.sendTextReliable(state.chatId, `🖥️ 桌面指令：${clean || "请查看附件"}`);
         for (const file of attachmentPaths) await this.sendMedia(file, "", "desktop");
         this.updateMessage(message.id, "sent");
         await this.runAgent(clean || "请处理随消息附带的文件。", attachmentPaths);
@@ -222,6 +241,26 @@ export class WeixinBotService {
     await this.emitStatus();
   }
 
+  async setModel(modelId: string): Promise<void> {
+    await this.settings.setNewSessionModelId(modelId);
+    this.modelId = modelId;
+    if (this.agent) {
+      const sessionId = this.store.getState().sessionId;
+      await this.agent.setConfigOption("model", modelId, sessionId).catch(() => undefined);
+    }
+    await this.emitStatus();
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    await this.settings.setPreferredModeId(modeId);
+    this.modeId = modeId;
+    if (this.agent) {
+      const sessionId = this.store.getState().sessionId;
+      await this.agent.setMode(modeId, sessionId).catch(() => undefined);
+    }
+    await this.emitStatus();
+  }
+
   async clearAllData(confirmation: string): Promise<void> {
     if (confirmation !== CLEAR_CONFIRMATION) throw new Error(`请输入“${CLEAR_CONFIRMATION}”确认`);
     const workspacePath = this.store.getState().workspacePath;
@@ -237,6 +276,8 @@ export class WeixinBotService {
     this.contextUsage = undefined;
     this.modelId = undefined;
     this.modeId = undefined;
+    this.availableModels = [];
+    this.availableModes = [];
     this.emit({ type: "history-reset" });
     await this.emitStatus();
   }
@@ -258,21 +299,19 @@ export class WeixinBotService {
     while (!signal.aborted && this.api) {
       const state = this.store.getState();
       try {
-        const response = await this.api.getUpdates(state.updatesBuffer, signal);
+        const { updates, nextOffset } = await this.api.getUpdates(state.updatesOffset, signal);
         if (signal.aborted) break;
-        if (response.errcode === -14 || response.ret === -14) throw new Error("微信登录已失效，请重新绑定");
-        if (response.ret && response.ret !== 0) throw new Error(`微信同步失败: ${response.errmsg ?? response.ret}`);
-        for (const message of response.msgs ?? []) await this.acceptInbound(message);
-        if (response.get_updates_buf !== undefined) {
-          this.store.patchState({ updatesBuffer: response.get_updates_buf });
+        for (const update of updates) await this.acceptInbound(update);
+        if (nextOffset !== state.updatesOffset) {
+          this.store.patchState({ updatesOffset: nextOffset });
         }
         failures = 0;
       } catch (error) {
         if (signal.aborted) break;
         failures += 1;
-        if (error instanceof Error && /登录已失效/.test(error.message)) {
+        if (error instanceof Error && /unauthorized|token/i.test(error.message)) {
           this.api = undefined;
-          this.store.patchState({ lastError: error.message, paused: true });
+          this.store.patchState({ lastError: "Telegram Token 已失效，请重新配置", paused: true });
           await this.emitStatus();
           break;
         }
@@ -282,52 +321,71 @@ export class WeixinBotService {
     }
   }
 
-  private async acceptInbound(raw: ILinkMessage, recoveredPlatformId?: string): Promise<void> {
+  private async acceptInbound(update: TelegramUpdate, recoveredPlatformId?: string): Promise<void> {
     const state = this.store.getState();
-    if (!state.userId || raw.from_user_id !== state.userId || raw.message_type !== 1) return;
-    const platformId = recoveredPlatformId ?? String(raw.message_id ?? raw.client_id ?? randomUUID());
-    if (!recoveredPlatformId && !this.store.persistInbox(platformId, raw)) return;
-    const normalized = await this.normalizeInbound(raw);
-    const message = this.addMessage({
+    const message = update.message ?? update.edited_message ?? update.channel_post;
+    if (!message || !message.text || message.text.startsWith("/")) {
+      if (message?.text?.startsWith("/start")) {
+        await this.handleStartCommand(message).catch(() => undefined);
+      }
+      return;
+    }
+    if (state.chatId != null && message.chat.id !== state.chatId) return;
+    const platformId = recoveredPlatformId ?? String(update.update_id);
+    if (!recoveredPlatformId && !this.store.persistInbox(platformId, update)) return;
+    const normalized = await this.normalizeInbound(message);
+    const stored = this.addMessage({
       platformId,
       direction: "inbound",
-      source: "weixin",
+      source: "telegram",
       role: "user",
       text: normalized.text,
       media: normalized.media,
       status: "processing",
     });
-    const secret = await this.secrets.read();
-    await this.secrets.write({ ...secret, ...(raw.context_token ? { contextToken: raw.context_token } : {}) });
+    if (state.chatId == null) {
+      this.store.patchState({ chatId: message.chat.id });
+    }
     this.enqueue(async () => {
       try {
-        this.updateMessage(message.id, "sent");
+        this.updateMessage(stored.id, "sent");
         await this.runAgent(
           normalized.prompt,
           normalized.media.map((item) => item.localPath).filter((value): value is string => Boolean(value)),
         );
         this.store.completeInbox(platformId);
       } catch (error) {
-        this.updateMessage(message.id, "failed");
+        this.updateMessage(stored.id, "failed");
         await this.recordError(error);
       }
     });
   }
 
-  private async normalizeInbound(raw: ILinkMessage): Promise<{ text: string; prompt: string; media: WeixinMedia[] }> {
+  private async handleStartCommand(message: ApiMessage): Promise<void> {
+    if (!this.api) return;
+    const state = this.store.getState();
+    if (state.chatId == null) {
+      this.store.patchState({ chatId: message.chat.id });
+    }
+    await this.api.sendMessage(message.chat.id, "👋 你好！我是 Devin Agent 的 Telegram Bot。发送消息即可与 Devin CLI 对话。").catch(() => undefined);
+    await this.emitStatus();
+  }
+
+  private async normalizeInbound(message: ApiMessage): Promise<{ text: string; prompt: string; media: TelegramMedia[] }> {
     const texts: string[] = [];
-    const media: WeixinMedia[] = [];
-    for (const item of raw.item_list ?? []) {
-      if (item.ref_msg?.title) texts.push(`> 引用：${item.ref_msg.title}`);
-      if (item.type === MessageItemType.TEXT && item.text_item?.text) texts.push(item.text_item.text);
-      if (item.type === MessageItemType.VOICE && item.voice_item?.text) texts.push(`[语音转写] ${item.voice_item.text}`);
-      if (item.type !== MessageItemType.TEXT && this.api) {
-        const downloaded = await this.api.download(item).catch(() => undefined);
+    const media: TelegramMedia[] = [];
+    if (message.text) texts.push(message.text);
+    if (message.caption) texts.push(message.caption);
+    if (this.api) {
+      const fileMeta = message.photo?.[message.photo.length - 1] ?? message.document ?? message.image ?? message.animation ?? message.video ?? message.voice ?? message.audio;
+      if (fileMeta?.file_id) {
+        const downloaded = await this.api.downloadFileById(fileMeta.file_id).catch(() => undefined);
         if (downloaded) {
           await this.store.saveMedia(downloaded.buffer, downloaded.name, "inbound");
           const localPath = await this.saveWorkspaceMedia(downloaded.buffer, downloaded.name);
+          const kind = mediaKind(downloaded.mimeType);
           media.push({
-            kind: downloaded.kind,
+            kind,
             name: downloaded.name,
             mimeType: downloaded.mimeType,
             size: downloaded.buffer.length,
@@ -338,7 +396,7 @@ export class WeixinBotService {
     }
     const text = texts.join("\n").trim() || (media.length ? "发送了附件" : "收到一条空消息");
     const attachmentText = media.length
-      ? `\n\n本条微信消息的工作目录附件：\n${media.map((item) => `- ${item.kind}: ${item.localPath}`).join("\n")}`
+      ? `\n\n本条 Telegram 消息的工作目录附件：\n${media.map((item) => `- ${item.kind}: ${item.localPath}`).join("\n")}`
       : "";
     return { text, prompt: `${text}${attachmentText}`, media };
   }
@@ -347,24 +405,20 @@ export class WeixinBotService {
     await this.ensureAgent();
     const state = this.store.getState();
     const sessionId = state.sessionId;
-    if (!this.agent || !sessionId) throw new Error("微信 Bot 的 Devin 会话不可用");
+    if (!this.agent || !sessionId) throw new Error("Telegram Bot 的 Devin 会话不可用");
     this.running = true;
     this.capturingAnswer = true;
     this.assistantAnswer = "";
     await this.emitStatus();
-    const secret = await this.secrets.read();
-    const ticket = this.api && state.userId
-      ? await this.api.getTypingTicket(state.userId, secret.contextToken).catch(() => undefined)
-      : undefined;
-    if (ticket && this.api && state.userId) {
-      await this.api.sendTyping(state.userId, ticket, true).catch(() => undefined);
+    if (this.api && state.chatId != null) {
+      await this.api.sendChatAction(state.chatId, "typing").catch(() => undefined);
     }
     try {
       const content = await this.promptContent(prompt, attachmentPaths);
       await this.agent.prompt(content, sessionId);
       const answer = this.assistantAnswer.trim();
       if (!answer) throw new Error("Devin ACP 未返回可发送的文本回复");
-      const clientId = `devin-agent-${randomUUID()}`;
+      const clientId = generateClientId();
       this.addMessage({
         platformId: clientId,
         direction: "outbound",
@@ -374,14 +428,11 @@ export class WeixinBotService {
         media: [],
         status: "pending",
       });
-      if (state.userId) await this.sendTextReliable(state.userId, answer, clientId);
+      if (state.chatId != null) await this.sendTextReliable(state.chatId, answer, clientId);
       this.store.patchState({ lastError: undefined });
     } finally {
       this.capturingAnswer = false;
       this.assistantAnswer = "";
-      if (ticket && this.api && state.userId) {
-        await this.api.sendTyping(state.userId, ticket, false).catch(() => undefined);
-      }
       this.running = false;
       await this.emitStatus();
     }
@@ -389,7 +440,7 @@ export class WeixinBotService {
 
   private async ensureAgent(): Promise<void> {
     const state = this.store.getState();
-    if (!state.workspacePath) throw new Error("微信 Bot 尚未配置工作目录");
+    if (!state.workspacePath) throw new Error("Telegram Bot 尚未配置工作目录");
     const [binaryPath, requestedModel, requestedMode] = await Promise.all([
       this.settings.getDevinCliPath(),
       this.settings.getNewSessionModelId(),
@@ -401,7 +452,7 @@ export class WeixinBotService {
     const host = new DevinAcpHost({
       ...(binaryPath ? { binaryPath } : {}),
       cwd: state.workspacePath,
-      clientName: "devin-agent-weixin",
+      clientName: "devin-agent-telegram",
       clientVersion: this.appVersion,
       clientFeatures: { elicitationForm: false, elicitationUrl: false, chains: false },
       onUpdate: (event) => this.handleAgentUpdate(event),
@@ -417,7 +468,7 @@ export class WeixinBotService {
       : await host.newSession(state.workspacePath);
     if (state.sessionId && session.sessionId !== state.sessionId) {
       await host.stop();
-      throw new Error("微信 Bot 固定会话身份发生变化，已停止以保护历史");
+      throw new Error("Telegram Bot 固定会话身份发生变化，已停止以保护历史");
     }
     const snapshot = buildAgentSnapshot(capabilities, session, requestedModel ?? undefined);
     if (requestedModel && snapshot.models.some((model) => model.id === requestedModel)) {
@@ -435,6 +486,8 @@ export class WeixinBotService {
     }
     this.agent = host;
     this.agentSignature = signature;
+    this.availableModels = snapshot.models;
+    this.availableModes = snapshot.modes ?? [];
     this.store.patchState({ sessionId: session.sessionId });
     await this.emitStatus();
   }
@@ -469,7 +522,7 @@ export class WeixinBotService {
   private async promptContent(prompt: string, attachmentPaths: string[]): Promise<PromptContent[]> {
     const paths = attachmentPaths.map((file) => `- ${file}`).join("\n");
     const text = [
-      "你正在通过 Devin Agent 的微信 Bot 固定会话回复用户。请给出适合直接发送到微信的最终答复；不要依赖桌面端专属 UI。",
+      "你正在通过 Devin Agent 的 Telegram Bot 固定会话回复用户。请给出适合直接发送到 Telegram 的最终答复；不要依赖桌面端专属 UI。",
       prompt,
       paths ? `本次可用附件：\n${paths}` : "",
     ].filter(Boolean).join("\n\n");
@@ -485,14 +538,14 @@ export class WeixinBotService {
 
   private async sendMedia(file: string, caption: string, source: "agent" | "desktop" = "agent"): Promise<boolean> {
     const state = this.store.getState();
-    if (!state.userId || !state.workspacePath) throw new Error("微信 Bot 尚未完成绑定");
+    if (state.chatId == null || !state.workspacePath) throw new Error("Telegram Bot 尚未完成绑定");
     const real = await this.validateWorkspaceFile(file, state.workspacePath);
-    if (caption) await this.sendTextReliable(state.userId, caption);
+    if (caption) await this.sendTextReliable(state.chatId, caption);
     const buffer = await fs.readFile(real);
     const localPath = await this.store.saveMedia(buffer, path.basename(real), "outbound");
-    const clientId = `devin-agent-${randomUUID()}`;
+    const clientId = generateClientId();
     const mimeType = mimeForPath(real);
-    const media: WeixinMedia = {
+    const media: TelegramMedia = {
       kind: mediaKind(mimeType),
       name: path.basename(real),
       mimeType,
@@ -508,33 +561,29 @@ export class WeixinBotService {
       media: [media],
       status: "pending",
     });
-    const payload: WeixinOutboxPayload = { kind: "media", to: state.userId, localPath };
+    const payload: TelegramOutboxPayload = { kind: "media", chatId: state.chatId, localPath, ...(caption ? { caption } : {}) };
     this.store.enqueueOutbox(clientId, payload);
     return this.deliverOutbox(clientId, payload);
   }
 
-  private async sendTextReliable(to: string, text: string, existingClientId?: string): Promise<boolean> {
-    const clientId = existingClientId ?? `devin-agent-${randomUUID()}`;
-    const payload: WeixinOutboxPayload = { kind: "text", to, text };
+  private async sendTextReliable(chatId: number, text: string, existingClientId?: string): Promise<boolean> {
+    const clientId = existingClientId ?? generateClientId();
+    const payload: TelegramOutboxPayload = { kind: "text", chatId, text };
     this.store.enqueueOutbox(clientId, payload);
     return this.deliverOutbox(clientId, payload);
   }
 
-  private async deliverOutbox(clientId: string, payload: WeixinOutboxPayload): Promise<boolean> {
+  private async deliverOutbox(clientId: string, payload: TelegramOutboxPayload): Promise<boolean> {
     if (!this.api) return false;
     try {
-      const secret = await this.secrets.read();
       if (payload.kind === "text") {
-        try {
-          await this.api.sendText(payload.to, payload.text, secret.contextToken, clientId);
-        } catch (error) {
-          if (!/-2\b|context.?token/i.test(errorMessage(error))) throw error;
-          await this.api.getTypingTicket(payload.to).catch(() => undefined);
-          await this.api.sendText(payload.to, payload.text, undefined, clientId);
-        }
+        await this.api.sendMessage(payload.chatId, payload.text);
       } else {
-        const uploaded = await this.api.upload(payload.localPath, payload.to);
-        await this.api.sendItem(payload.to, uploaded.item, secret.contextToken, clientId);
+        if (isImageFile(payload.localPath)) {
+          await this.api.sendPhoto(payload.chatId, payload.localPath, payload.caption);
+        } else {
+          await this.api.sendDocument(payload.chatId, payload.localPath, payload.caption);
+        }
       }
       this.store.completeOutbox(clientId);
       const message = this.store.updateMessageByPlatformId(clientId, "sent");
@@ -552,17 +601,17 @@ export class WeixinBotService {
       await this.deliverOutbox(entry.clientId, entry.payload);
     }
     for (const entry of this.store.pendingInbox()) {
-      if (isRecord(entry.payload)) await this.acceptInbound(entry.payload as ILinkMessage, entry.platformId);
+      if (isRecord(entry.payload)) await this.acceptInbound(entry.payload as TelegramUpdate, entry.platformId);
     }
   }
 
-  private addMessage(input: Omit<WeixinMessage, "id" | "createdAt">): WeixinMessage {
+  private addMessage(input: Omit<TelegramMessage, "id" | "createdAt">): TelegramMessage {
     const message = this.store.addMessage(input);
     this.emit({ type: "message", message });
     return message;
   }
 
-  private updateMessage(id: number, status: WeixinMessage["status"]): void {
+  private updateMessage(id: number, status: TelegramMessage["status"]): void {
     const message = this.store.updateMessage(id, status);
     if (message) this.emit({ type: "message", message });
   }
@@ -572,7 +621,9 @@ export class WeixinBotService {
   }
 
   private async emitStatus(): Promise<void> {
-    this.emit({ type: "status", status: await this.getStatus() });
+    const state = this.store.getState();
+    const secret = await this.secrets.read();
+    this.emit({ type: "status", status: this.buildStatus(state, secret) });
   }
 
   private async recordError(error: unknown): Promise<void> {
@@ -601,7 +652,7 @@ export class WeixinBotService {
     const real = await fs.realpath(path.isAbsolute(candidate) ? candidate : path.resolve(root, candidate));
     const relative = path.relative(root, real);
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error("文件不在微信 Bot 工作目录内");
+      throw new Error("文件不在 Telegram Bot 工作目录内");
     }
     const stat = await fs.stat(real);
     if (!stat.isFile()) throw new Error("附件必须是文件");
@@ -610,7 +661,7 @@ export class WeixinBotService {
 
   private async saveWorkspaceMedia(buffer: Buffer, name: string): Promise<string> {
     const workspacePath = this.store.getState().workspacePath;
-    if (!workspacePath) throw new Error("微信 Bot 尚未配置工作目录");
+    if (!workspacePath) throw new Error("Telegram Bot 尚未配置工作目录");
     const directory = path.join(workspacePath, WORKSPACE_MEDIA_DIRECTORY, "inbound", new Date().toISOString().slice(0, 10));
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const filePath = path.join(directory, `${Date.now()}-${safeFileName(name)}`);
@@ -672,25 +723,20 @@ function mimeForPath(file: string): string {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".bmp": "image/bmp",
     ".mp4": "video/mp4",
     ".mov": "video/quicktime",
     ".pdf": "application/pdf",
     ".txt": "text/plain",
     ".wav": "audio/wav",
-    ".silk": "audio/silk",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
   } as Record<string, string>)[extension] ?? "application/octet-stream";
-}
-
-function mediaKind(mimeType: string): WeixinMedia["kind"] {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "voice";
-  return "file";
 }
 
 function safeError(error: unknown): string {
   return errorMessage(error)
-    .replace(/(bearer\s+|token|secret|password|api[_-]?key)[=:]?\s*\S+/gi, "$1 [REDACTED]")
+    .replace(/(bearer\s+|token|secret|password|api[_-]?key|\b\d+:aa[a-za-z0-9_-]{30,}\b)[=:]?\s*\S*/gi, "$1 [REDACTED]")
     .replace(/\s+/g, " ")
     .slice(0, 500);
 }
@@ -704,16 +750,14 @@ function stringValue(value: unknown): string {
 }
 
 function isRecord(value: unknown): value is JsonObject {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return;
-  await new Promise<void>((resolve) => {
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
+    signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
   });
 }
+
+export { redactToken };

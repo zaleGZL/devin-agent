@@ -28,6 +28,7 @@ function previewSession(id: string, title: string, ageMs: number, messageCount: 
 
 export function createPreviewApi(): DesktopApi {
   const weixinConnected = new URLSearchParams(window.location.search).get("weixin") === "connected";
+  const telegramConnected = new URLSearchParams(window.location.search).get("telegram") === "connected";
   return {
     platform: "darwin",
     app: {
@@ -222,6 +223,43 @@ export function createPreviewApi(): DesktopApi {
       getHistory: async () => ({ messages: [], hasMore: false }),
       send: async () => undefined,
       abortTurn: async () => undefined,
+      setAutoLaunch: async () => undefined,
+      clearAllData: async () => undefined,
+      onEvent: () => () => undefined,
+    },
+    telegram: {
+      getStatus: async () => ({
+        state: telegramConnected ? "online" : "workspace-ready",
+        workspacePath: workspace,
+        ...(telegramConnected ? { botId: 12345, boundChatId: 67890, sessionId: "preview-tg" } : {}),
+        online: telegramConnected,
+        autoLaunch: false,
+        running: false,
+        mediaBytes: 0,
+        modelId: telegramConnected ? "glm-5-2" : "adaptive",
+        modeId: telegramConnected ? "bypass" : "accept-edits",
+        models: [
+          { provider: "devin", id: "glm-5-2", name: "GLM-5.2 High", reasoning: true },
+          { provider: "devin", id: "adaptive", name: "Adaptive", reasoning: true },
+        ],
+        modes: [
+          { id: "bypass", name: "Bypass" },
+          { id: "accept-edits", name: "Accept Edits" },
+          { id: "plan", name: "Plan" },
+        ],
+      }),
+      chooseWorkspace: async () => workspace,
+      configureWorkspace: async () => undefined,
+      chooseAttachments: async () => [],
+      saveToken: async () => undefined,
+      start: async () => undefined,
+      pause: async () => undefined,
+      disconnect: async () => undefined,
+      getHistory: async () => ({ messages: [], hasMore: false }),
+      send: async () => undefined,
+      abortTurn: async () => undefined,
+      setModel: async () => undefined,
+      setMode: async () => undefined,
       setAutoLaunch: async () => undefined,
       clearAllData: async () => undefined,
       onEvent: () => () => undefined,
