@@ -57,7 +57,7 @@ export class TelegramBotService {
     const state = this.store.getState();
     if (state.workspacePath) await this.validateWorkspace(state.workspacePath);
     const secret = await this.secrets.read();
-    if (state.botId != null && state.chatId != null && secret.botToken && !state.paused) {
+    if (state.botId != null && secret.botToken && !state.paused) {
       await this.start().catch((error) => this.recordError(error));
     } else {
       await this.emitStatus();
@@ -68,11 +68,11 @@ export class TelegramBotService {
     const state = this.store.getState();
     const secret = await this.secrets.read();
     const configured = Boolean(state.workspacePath);
-    const hasLogin = Boolean(state.botId != null && state.chatId != null && secret.botToken);
+    const hasLogin = Boolean(state.botId != null && secret.botToken);
     const connectionState = !configured
       ? "unconfigured"
       : !hasLogin
-        ? (state.botId != null ? "token-required" : "workspace-ready")
+        ? "token-required"
         : state.lastError
           ? "error"
           : this.api
@@ -119,13 +119,14 @@ export class TelegramBotService {
     await this.secrets.write({ botToken: clean });
     this.store.patchState({ botId: me.id, lastError: undefined, paused: false });
     await this.emitStatus();
+    await this.start().catch((error) => this.recordError(error));
   }
 
   async start(): Promise<void> {
     if (this.api) return;
     const state = this.store.getState();
     const secret = await this.secrets.read();
-    if (!state.workspacePath || state.botId == null || state.chatId == null || !secret.botToken) {
+    if (!state.workspacePath || state.botId == null || !secret.botToken) {
       throw new Error("Telegram Bot 尚未完成配置");
     }
     this.api = new TelegramApi(secret.botToken, this.appVersion);
