@@ -592,7 +592,10 @@ function createWindow(options: { sessionId?: string; title?: string; background?
     show: false,
     backgroundColor: "#f7f7f5",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
-    trafficLightPosition: { x: 17, y: 16 },
+    ...(process.platform === "darwin"
+      ? { trafficLightPosition: { x: 17, y: 16 } }
+      : { titleBarOverlay: { color: "#f7f7f5", symbolColor: "#4a4a4a", height: 40 } }),
+    ...(!app.isPackaged ? { icon: developmentIconPath } : {}),
     ...(!app.isPackaged ? { icon: developmentIconPath } : {}),
     webPreferences: {
       preload: path.join(currentDirectory, "../preload/index.cjs"),
