@@ -28,6 +28,7 @@ function previewSession(id: string, title: string, ageMs: number, messageCount: 
 
 export function createPreviewApi(): DesktopApi {
   const weixinConnected = new URLSearchParams(window.location.search).get("weixin") === "connected";
+  const telegramConnected = new URLSearchParams(window.location.search).get("telegram") === "connected";
   return {
     platform: "darwin",
     app: {
@@ -228,16 +229,24 @@ export function createPreviewApi(): DesktopApi {
     },
     telegram: {
       getStatus: async () => ({
-        state: "workspace-ready",
+        state: telegramConnected ? "online" : "workspace-ready",
         workspacePath: workspace,
-        online: false,
+        ...(telegramConnected ? { botId: 12345, boundChatId: 67890, sessionId: "preview-tg" } : {}),
+        online: telegramConnected,
         autoLaunch: false,
         running: false,
         mediaBytes: 0,
-        modelId: "adaptive",
-        modeId: "accept-edits",
-        models: [{ provider: "devin", id: "adaptive", reasoning: true }],
-        modes: [{ id: "accept-edits", name: "Accept Edits" }],
+        modelId: telegramConnected ? "glm-5-2" : "adaptive",
+        modeId: telegramConnected ? "bypass" : "accept-edits",
+        models: [
+          { provider: "devin", id: "glm-5-2", name: "GLM-5.2 High", reasoning: true },
+          { provider: "devin", id: "adaptive", name: "Adaptive", reasoning: true },
+        ],
+        modes: [
+          { id: "bypass", name: "Bypass" },
+          { id: "accept-edits", name: "Accept Edits" },
+          { id: "plan", name: "Plan" },
+        ],
       }),
       chooseWorkspace: async () => workspace,
       configureWorkspace: async () => undefined,

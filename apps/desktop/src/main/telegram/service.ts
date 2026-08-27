@@ -23,7 +23,7 @@ import {
   type TelegramUpdate,
 } from "./protocol";
 import { TelegramSecrets } from "./secrets";
-import { safeFileName, TelegramStore, type TelegramOutboxPayload } from "./store";
+import { safeFileName, TelegramStore, type StoredTelegramBotState, type TelegramOutboxPayload } from "./store";
 
 const CLEAR_CONFIRMATION = "清除 Telegram Bot 数据";
 const WORKSPACE_MEDIA_DIRECTORY = path.join(".devin-agent", "telegram");
@@ -108,6 +108,10 @@ export class TelegramBotService {
   async getStatus(): Promise<TelegramBotStatus> {
     const state = this.store.getState();
     const secret = await this.secrets.read();
+    return this.buildStatus(state, secret);
+  }
+
+  private buildStatus(state: StoredTelegramBotState, secret: { botToken?: string }): TelegramBotStatus {
     const configured = Boolean(state.workspacePath);
     const hasLogin = Boolean(state.botId != null && secret.botToken);
     const connectionState = !configured
@@ -610,7 +614,9 @@ export class TelegramBotService {
   }
 
   private async emitStatus(): Promise<void> {
-    this.emit({ type: "status", status: await this.getStatus() });
+    const state = this.store.getState();
+    const secret = await this.secrets.read();
+    this.emit({ type: "status", status: this.buildStatus(state, secret) });
   }
 
   private async recordError(error: unknown): Promise<void> {

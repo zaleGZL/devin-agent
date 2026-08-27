@@ -1,0 +1,81 @@
+- generic [ref=f4e3]:
+  - complementary [ref=f4e4]:
+    - generic [ref=f4e5]:
+      - strong [ref=f4e8]: Devin Agent
+      - button "Search threads" [ref=f4e9] [cursor=pointer]
+      - button "Hide sidebar" [ref=f4e13] [cursor=pointer]
+    - generic [ref=f4e16]:
+      - button "New task ⌘N" [ref=f4e17] [cursor=pointer]:
+        - text: New task
+        - generic [ref=f4e19]: ⌘N
+      - button "微信 Bot" [ref=f4e20] [cursor=pointer]
+      - button "Telegram Bot" [active] [ref=f4e25] [cursor=pointer]
+    - generic [ref=f4e30]:
+      - button "Projects" [expanded] [ref=f4e31] [cursor=pointer]
+      - generic [ref=f4e35]:
+        - generic [ref=f4e36]:
+          - button [expanded] [ref=f4e37]:
+            - strong [ref=f4e40]: devin-agent
+          - button "New task in devin-agent" [ref=f4e41] [cursor=pointer]
+          - button "Actions for devin-agent" [ref=f4e45] [cursor=pointer]
+        - group "devin-agent" [ref=f4e50]:
+          - generic [ref=f4e51]:
+            - button "Add desktop workspace support" [ref=f4e52]
+            - button "Actions for Add desktop workspace support"
+          - generic [ref=f4e54]:
+            - button "Build collapsible project navigation" [ref=f4e55]
+            - button "Actions for Build collapsible project navigation"
+          - generic [ref=f4e57]:
+            - button "Review the RPC event flow" [ref=f4e58]
+            - button "Actions for Review the RPC event flow"
+          - generic [ref=f4e60]:
+            - button "Fix authentication settings" [ref=f4e61]
+            - button "Actions for Fix authentication settings"
+          - button "Show more" [ref=f4e63] [cursor=pointer]
+      - generic [ref=f4e65]:
+        - button [ref=f4e66]:
+          - strong [ref=f4e69]: developer-docs
+        - button "New task in developer-docs" [ref=f4e70] [cursor=pointer]
+        - button "Actions for developer-docs" [ref=f4e74] [cursor=pointer]
+      - generic [ref=f4e80]:
+        - button [ref=f4e81]:
+          - strong [ref=f4e84]: termany
+        - button "New task in termany" [ref=f4e85] [cursor=pointer]
+        - button "Actions for termany" [ref=f4e89] [cursor=pointer]
+      - button "Recent" [expanded] [ref=f4e94] [cursor=pointer]
+      - generic [ref=f4e98]:
+        - button [ref=f4e99]:
+          - strong [ref=f4e101]: Compare two implementation options
+        - button "Actions for Compare two implementation options"
+      - generic [ref=f4e102]:
+        - button [ref=f4e103]:
+          - strong [ref=f4e105]: Plan the next release
+        - button "Actions for Plan the next release"
+    - button "demo · Settings" [ref=f4e107] [cursor=pointer]:
+      - generic [ref=f4e108]: DE
+      - strong [ref=f4e109]: demo
+  - main [ref=f4e110]:
+    - generic [ref=f4e193]:
+      - generic [ref=f4e194]:
+        - generic [ref=f4e200]:
+          - strong [ref=f4e201]: Telegram Bot
+          - generic [ref=f4e202]: 已连接 · GLM-5.2 High
+        - generic [ref=f4e207]:
+          - button "暂停 Telegram Bot" [ref=f4e208] [cursor=pointer]
+          - group [ref=f4e212]:
+            - generic "打开 Telegram Bot 设置" [ref=f4e213]
+      - generic [ref=f4e219]:
+        - strong [ref=f4e222]: 固定会话已就绪
+        - generic [ref=f4e223]: 在 Telegram 中向 Bot 发送 /start，然后发送消息即可。
+      - generic:
+        - generic [ref=f4e225]:
+          - textbox "发送消息到 Telegram Bot" [ref=f4e226]:
+            - /placeholder: 发消息到 Telegram Bot…
+          - generic [ref=f4e227]:
+            - generic [ref=f4e228]:
+              - button "添加附件" [ref=f4e229] [cursor=pointer]
+              - button "Bypass Permissions" [ref=f4e233] [cursor=pointer]
+            - generic [ref=f4e241]:
+              - button "GLM-5.2 High" [ref=f4e243] [cursor=pointer]
+              - button "发送" [disabled] [ref=f4e247]
+        - generic: Enter 发送 · Shift+Enter 换行
