@@ -130,8 +130,8 @@ export interface TelegramBotStatus {
   mediaBytes: number;
   modelId?: string;
   modeId?: string;
-  models: { provider?: string; id: string; name?: string }[];
-  modes: { id: string; name?: string }[];
+  models: Array<{ provider?: string; id: string; name?: string; description?: string; contextWindow?: number; reasoning?: boolean; supportsImages?: boolean }>;
+  modes: NonNullable<AgentSnapshot["modes"]>;
 }
 
 export interface TelegramHistoryPage {
@@ -426,6 +426,8 @@ export interface DesktopApi {
     getHistory(query?: { before?: number; limit?: number }): Promise<TelegramHistoryPage>;
     send(input: { text: string; attachmentPaths?: string[] }): Promise<void>;
     abortTurn(): Promise<void>;
+    setModel(modelId: string): Promise<void>;
+    setMode(modeId: string): Promise<void>;
     setAutoLaunch(enabled: boolean): Promise<void>;
     clearAllData(confirmation: string): Promise<void>;
     onEvent(listener: (event: TelegramBotEvent) => void): () => void;

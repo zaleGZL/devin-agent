@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   AgentSessionStats,
+  AgentSnapshot,
   TelegramBotEvent,
   TelegramBotStatus,
   TelegramHistoryPage,
@@ -42,8 +43,8 @@ export class TelegramBotService {
   private contextUsage?: AgentSessionStats["contextUsage"];
   private modelId?: string;
   private modeId?: string;
-  private availableModels: { provider?: string; id: string; name?: string }[] = [];
-  private availableModes: { id: string; name?: string }[] = [];
+  private availableModels: Array<{ provider?: string; id: string; name?: string; description?: string; contextWindow?: number; reasoning?: boolean; supportsImages?: boolean }> = [];
+  private availableModes: NonNullable<AgentSnapshot["modes"]> = [];
 
   constructor(
     rootPath: string,
@@ -233,6 +234,26 @@ export class TelegramBotService {
 
   async setAutoLaunch(enabled: boolean): Promise<void> {
     this.store.patchState({ autoLaunch: enabled });
+    await this.emitStatus();
+  }
+
+  async setModel(modelId: string): Promise<void> {
+    await this.settings.setNewSessionModelId(modelId);
+    this.modelId = modelId;
+    if (this.agent) {
+      const sessionId = this.store.getState().sessionId;
+      await this.agent.setConfigOption("model", modelId, sessionId).catch(() => undefined);
+    }
+    await this.emitStatus();
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    await this.settings.setPreferredModeId(modeId);
+    this.modeId = modeId;
+    if (this.agent) {
+      const sessionId = this.store.getState().sessionId;
+      await this.agent.setMode(modeId, sessionId).catch(() => undefined);
+    }
     await this.emitStatus();
   }
 

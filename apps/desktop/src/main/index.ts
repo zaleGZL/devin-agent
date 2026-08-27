@@ -1220,6 +1220,8 @@ function registerIpc(): void {
     return requireTelegramBot().send(text, attachmentPaths);
   });
   ipcMain.handle("telegram:abort", () => requireTelegramBot().abortTurn());
+  ipcMain.handle("telegram:set-model", (_event, value: unknown) => requireTelegramBot().setModel(expectString(value, "model id", 120)));
+  ipcMain.handle("telegram:set-mode", (_event, value: unknown) => requireTelegramBot().setMode(expectString(value, "mode id", 120)));
   ipcMain.handle("telegram:set-auto-launch", async (_event, value: unknown) => {
     const enabled = expectBoolean(value, "Telegram Bot 开机启动");
     app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? ["--telegram-background"] : [] });

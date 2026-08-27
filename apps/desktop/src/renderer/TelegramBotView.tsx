@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { TelegramBotStatus, TelegramMessage } from "../shared/types";
+import { ModelPicker, PermissionPicker } from "./features/composer/ComposerControls";
 
 export function TelegramBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: boolean; onShowSidebar(): void }) {
   const [status, setStatus] = useState<TelegramBotStatus>();
@@ -314,8 +315,22 @@ export function TelegramBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: b
                     >
                       <Paperclip size={16} />
                     </button>
+                    <PermissionPicker
+                      value={status.modeId ?? ""}
+                      modes={status.modes}
+                      updating={false}
+                      disabled={!bound}
+                      onChange={(value) => void window.devinAgent.telegram.setMode(value).catch((cause) => setError(messageOf(cause)))}
+                    />
                   </div>
                   <div className="composer-actions">
+                    <ModelPicker
+                      model={status.modelId ?? ""}
+                      models={status.models}
+                      pinnedModelIds={[]}
+                      onChange={(value) => void window.devinAgent.telegram.setModel(value).catch((cause) => setError(messageOf(cause)))}
+                      onPinnedModelIdsChange={() => undefined}
+                    />
                     <button
                       className={`send-button ${status.running ? "stop-button" : ""}`}
                       disabled={!status.running && !draft.trim() && attachments.length === 0}
