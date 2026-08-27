@@ -85,6 +85,7 @@ export interface WeixinHistoryPage {
 export type WeixinBotEvent =
   | { type: "status"; status: WeixinBotStatus }
   | { type: "message"; message: WeixinMessage }
+  | { type: "thought"; text: string; phase: "start" | "update" | "end" }
   | { type: "history-reset" };
 
 export type TelegramConnectionState =
@@ -143,6 +144,7 @@ export interface TelegramHistoryPage {
 export type TelegramBotEvent =
   | { type: "status"; status: TelegramBotStatus }
   | { type: "message"; message: TelegramMessage }
+  | { type: "thought"; text: string; phase: "start" | "update" | "end" }
   | { type: "history-reset" };
 
 export interface WorkspaceItem {

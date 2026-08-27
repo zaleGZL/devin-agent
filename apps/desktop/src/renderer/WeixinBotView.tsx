@@ -6,6 +6,7 @@ import {
   Bot,
   CircleAlert,
   CircleStop,
+  ChevronDown,
   File,
   FolderOpen,
   LoaderCircle,
@@ -16,6 +17,7 @@ import {
   QrCode,
   RotateCcw,
   Settings2,
+  Sparkles,
   Trash2,
   Wifi,
   WifiOff,
@@ -36,6 +38,7 @@ export function WeixinBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: boo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [clearValue, setClearValue] = useState("");
+  const [thinking, setThinking] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const followLatestRef = useRef(true);
@@ -55,12 +58,20 @@ export function WeixinBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: boo
   useEffect(() => {
     void refresh().catch((cause) => setError(messageOf(cause)));
     return window.devinAgent.weixin.onEvent((event) => {
-      if (event.type === "status") setStatus(event.status);
+      if (event.type === "status") {
+        setStatus(event.status);
+        if (!event.status.running) setThinking("");
+      }
       if (event.type === "history-reset") {
         setMessages([]);
         setLogin(undefined);
+        setThinking("");
+      }
+      if (event.type === "thought") {
+        setThinking((current) => event.phase === "start" ? event.text : current + event.text);
       }
       if (event.type === "message") {
+        setThinking("");
         setMessages((current) => {
           const index = current.findIndex((item) => item.id === event.message.id);
           if (index < 0) {
@@ -312,7 +323,8 @@ export function WeixinBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: boo
                 </div>
               )}
               {messages.map((message) => <WeixinMessageRow key={message.id} message={message} />)}
-              {status.running && <div className="working-line"><LoaderCircle className="spin" size={14} />微信 Bot 正在处理…</div>}
+              {status.running && <BotThinkingBlock text={thinking} />}
+              {status.running && !thinking && <div className="working-line"><LoaderCircle className="spin" size={14} />微信 Bot 正在处理…</div>}
             </div>
           </div>
           <div className="composer-wrap weixin-composer-wrap">
@@ -379,6 +391,21 @@ export function WeixinBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: boo
         </div>
       )}
     </section>
+  );
+}
+
+function BotThinkingBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(true);
+  if (!text) return null;
+  return (
+    <div className={`reasoning-block ${open ? "open" : ""}`}>
+      <button className="reasoning-summary" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <Sparkles size={13} />
+        <span>思考过程</span>
+        <ChevronDown className="reasoning-chevron" size={13} />
+      </button>
+      {open && <p>{text}</p>}
+    </div>
   );
 }
 

@@ -508,6 +508,13 @@ export class TelegramBotService {
         };
       }
     }
+    if (update.sessionUpdate === "agent_thought_chunk") {
+      const text = extractText(update.content ?? update.thought ?? update.text);
+      if (text) {
+        const ph = thoughtPhase(update);
+        this.emit({ type: "thought", text, phase: ph });
+      }
+    }
     if (!this.capturingAnswer || update.sessionUpdate !== "agent_message_chunk") return;
     this.assistantAnswer += extractText(update.content ?? update.message);
   }
@@ -693,6 +700,15 @@ function extractText(value: unknown): string {
     .filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => String(part.text))
     .join("");
+}
+
+function thoughtPhase(update: JsonObject): "start" | "update" | "end" {
+  const raw = update.phase ?? update.status;
+  if (typeof raw !== "string") return "update";
+  const value = raw.toLowerCase();
+  if (value === "start" || value === "started") return "start";
+  if (value === "end" || value === "ended" || value === "complete" || value === "completed") return "end";
+  return "update";
 }
 
 function finiteNumber(value: unknown): number | undefined {
