@@ -166,7 +166,7 @@ export function TelegramBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: b
             <span>
               {status.online ? <Wifi size={12} /> : <WifiOff size={12} />}
               {status.online ? "已连接" : stateLabel(status.state)}
-              {status.modelId ? ` · ${status.modelId}` : ""}
+              {status.modelId ? ` · ${modelLabel(status.modelId, status.models)}` : ""}
             </span>
           </div>
         </div>
@@ -192,7 +192,8 @@ export function TelegramBotView({ sidebarOpen, onShowSidebar }: { sidebarOpen: b
                 </div>
                 <dl className="weixin-settings-meta">
                   <div><dt>工作目录</dt><dd title={status.workspacePath}>{shortPath(status.workspacePath ?? "")}</dd></div>
-                  <div><dt>运行模式</dt><dd>{status.modeId ?? "自适应"}</dd></div>
+                  <div><dt>模型</dt><dd>{modelLabel(status.modelId, status.models)}</dd></div>
+                  <div><dt>运行模式</dt><dd>{modeLabel(status.modeId, status.modes)}</dd></div>
                   <div><dt>上下文</dt><dd>{status.contextUsage?.percent == null ? "—" : `${Math.round(status.contextUsage.percent)}%`}</dd></div>
                   <div><dt>媒体占用</dt><dd>{formatBytes(status.mediaBytes)}</dd></div>
                 </dl>
@@ -384,6 +385,18 @@ function stateLabel(value: TelegramBotStatus["state"]): string {
     paused: "已暂停",
     error: "连接异常",
   })[value];
+}
+
+function modelLabel(modelId: string | undefined, models: { id: string; name?: string }[]): string {
+  if (!modelId) return "自适应";
+  const found = models.find((model) => model.id === modelId);
+  return found?.name ?? modelId;
+}
+
+function modeLabel(modeId: string | undefined, modes: { id: string; name?: string }[]): string {
+  if (!modeId) return "自适应";
+  const found = modes.find((mode) => mode.id === modeId);
+  return found?.name ?? modeId;
 }
 
 function messageOf(error: unknown): string {

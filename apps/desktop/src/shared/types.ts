@@ -130,6 +130,8 @@ export interface TelegramBotStatus {
   mediaBytes: number;
   modelId?: string;
   modeId?: string;
+  models: { provider?: string; id: string; name?: string }[];
+  modes: { id: string; name?: string }[];
 }
 
 export interface TelegramHistoryPage {

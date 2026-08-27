@@ -236,6 +236,8 @@ export function createPreviewApi(): DesktopApi {
         mediaBytes: 0,
         modelId: "adaptive",
         modeId: "accept-edits",
+        models: [{ provider: "devin", id: "adaptive" }],
+        modes: [{ id: "accept-edits", name: "Accept Edits" }],
       }),
       chooseWorkspace: async () => workspace,
       configureWorkspace: async () => undefined,

@@ -42,6 +42,8 @@ export class TelegramBotService {
   private contextUsage?: AgentSessionStats["contextUsage"];
   private modelId?: string;
   private modeId?: string;
+  private availableModels: { provider?: string; id: string; name?: string }[] = [];
+  private availableModes: { id: string; name?: string }[] = [];
 
   constructor(
     rootPath: string,
@@ -59,8 +61,46 @@ export class TelegramBotService {
     const secret = await this.secrets.read();
     if (state.botId != null && secret.botToken && !state.paused) {
       await this.start().catch((error) => this.recordError(error));
+      await this.preloadModelInfo().catch(() => undefined);
     } else {
       await this.emitStatus();
+    }
+  }
+
+  private async preloadModelInfo(): Promise<void> {
+    const state = this.store.getState();
+    if (!state.workspacePath) return;
+    const [binaryPath, requestedModel, requestedMode] = await Promise.all([
+      this.settings.getDevinCliPath(),
+      this.settings.getNewSessionModelId(),
+      this.settings.getPreferredModeId(),
+    ]);
+    void requestedMode;
+    const host = new DevinAcpHost({
+      ...(binaryPath ? { binaryPath } : {}),
+      cwd: state.workspacePath,
+      clientName: "devin-agent-telegram",
+      clientVersion: this.appVersion,
+      clientFeatures: { elicitationForm: false, elicitationUrl: false, chains: false },
+      onUpdate: () => undefined,
+      onPermissionRequest: () => ({ outcome: { outcome: "cancelled" } }),
+      onElicitationRequest: () => ({ action: "cancel" }),
+      onStateChange: () => undefined,
+    });
+    try {
+      const capabilities = await host.start();
+      const session = state.sessionId
+        ? await host.loadSession(state.sessionId, { cwd: state.workspacePath })
+        : await host.newSession(state.workspacePath);
+      const snapshot = buildAgentSnapshot(capabilities, session, requestedModel ?? undefined);
+      const currentModel = snapshot.state.model as { id?: string } | undefined;
+      this.modelId = currentModel?.id;
+      this.modeId = typeof snapshot.state.modeId === "string" ? snapshot.state.modeId : undefined;
+      this.availableModels = snapshot.models;
+      this.availableModes = snapshot.modes ?? [];
+      await this.emitStatus();
+    } finally {
+      await host.stop().catch(() => undefined);
     }
   }
 
@@ -94,6 +134,8 @@ export class TelegramBotService {
       mediaBytes: this.store.mediaBytes(),
       ...(this.modelId ? { modelId: this.modelId } : {}),
       ...(this.modeId ? { modeId: this.modeId } : {}),
+      models: this.availableModels,
+      modes: this.availableModes,
     };
   }
 
@@ -209,6 +251,8 @@ export class TelegramBotService {
     this.contextUsage = undefined;
     this.modelId = undefined;
     this.modeId = undefined;
+    this.availableModels = [];
+    this.availableModes = [];
     this.emit({ type: "history-reset" });
     await this.emitStatus();
   }
@@ -417,6 +461,8 @@ export class TelegramBotService {
     }
     this.agent = host;
     this.agentSignature = signature;
+    this.availableModels = snapshot.models;
+    this.availableModes = snapshot.modes ?? [];
     this.store.patchState({ sessionId: session.sessionId });
     await this.emitStatus();
   }
