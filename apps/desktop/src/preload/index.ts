@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthUiEvent, DesktopApi, WeixinBotEvent } from "../shared/types";
+import type { AgentEvent, AuthUiEvent, DesktopApi, TelegramBotEvent, WeixinBotEvent } from "../shared/types";
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload);
@@ -101,6 +101,22 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     setAutoLaunch: (enabled) => ipcRenderer.invoke("weixin:set-auto-launch", enabled),
     clearAllData: (confirmation) => ipcRenderer.invoke("weixin:clear", confirmation),
     onEvent: (listener) => subscribe<WeixinBotEvent>("weixin:event", listener),
+  },
+  telegram: {
+    getStatus: () => ipcRenderer.invoke("telegram:status"),
+    chooseWorkspace: () => ipcRenderer.invoke("telegram:choose-workspace"),
+    configureWorkspace: (workspacePath) => ipcRenderer.invoke("telegram:configure-workspace", workspacePath),
+    chooseAttachments: () => ipcRenderer.invoke("telegram:choose-attachments"),
+    saveToken: (token) => ipcRenderer.invoke("telegram:save-token", token),
+    start: () => ipcRenderer.invoke("telegram:start"),
+    pause: () => ipcRenderer.invoke("telegram:pause"),
+    disconnect: () => ipcRenderer.invoke("telegram:disconnect"),
+    getHistory: (query) => ipcRenderer.invoke("telegram:history", query),
+    send: (input) => ipcRenderer.invoke("telegram:send", input),
+    abortTurn: () => ipcRenderer.invoke("telegram:abort"),
+    setAutoLaunch: (enabled) => ipcRenderer.invoke("telegram:set-auto-launch", enabled),
+    clearAllData: (confirmation) => ipcRenderer.invoke("telegram:clear", confirmation),
+    onEvent: (listener) => subscribe<TelegramBotEvent>("telegram:event", listener),
   },
   onAppCommand: (listener) => subscribe<string>("app:command", listener),
 };

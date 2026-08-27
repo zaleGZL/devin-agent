@@ -32,6 +32,7 @@ import type {
   WorkspaceChanges,
   WorkspaceDiff,
   WeixinBotStatus,
+  TelegramBotStatus,
 } from "../shared/types";
 import {
   applyAgentEvent,
@@ -267,8 +268,9 @@ export default function App() {
   const [chainConversations, setChainConversations] = useState<ChainConversationStore>({});
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
-  const [activeView, setActiveView] = useState<"thread" | "weixin">("thread");
+  const [activeView, setActiveView] = useState<"thread" | "weixin" | "telegram">("thread");
   const [weixinStatus, setWeixinStatus] = useState<WeixinBotStatus>();
+  const [telegramStatus, setTelegramStatus] = useState<TelegramBotStatus>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<InlineMentionEditorHandle>(null);
   const composingRef = useRef(false);
@@ -1110,6 +1112,13 @@ export default function App() {
     void window.devinAgent.weixin.getStatus().then(setWeixinStatus).catch(() => undefined);
     return window.devinAgent.weixin.onEvent((event) => {
       if (event.type === "status") setWeixinStatus(event.status);
+    });
+  }, []);
+
+  useEffect(() => {
+    void window.devinAgent.telegram.getStatus().then(setTelegramStatus).catch(() => undefined);
+    return window.devinAgent.telegram.onEvent((event) => {
+      if (event.type === "status") setTelegramStatus(event.status);
     });
   }, []);
 
@@ -2418,7 +2427,7 @@ export default function App() {
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.devinAgent.platform === "darwin" ? " platform-macos" : ""}${sidebarDrag ? " sidebar-is-dragging" : ""}`}>
       <AppSidebar {...{
-        sidebarOpen, sessionQuery, activeView, weixinStatus, pinnedSessions, recentTasks, selectedThreadPath, runningSessionIds, unreadSessionIds, sidebarDrag, renamingSessionId, sessionRenameDraft, sessionRenameInputRef, projectsSectionOpen, filteredWorkspaces, projectSessions, expandedProjects, fullyExpandedProjects, workspace, activeSession, renamingProjectPath, projectRenameDraft, projectRenameInputRef, recentSectionOpen, profile,
+        sidebarOpen, sessionQuery, activeView, weixinStatus, telegramStatus, pinnedSessions, recentTasks, selectedThreadPath, runningSessionIds, unreadSessionIds, sidebarDrag, renamingSessionId, sessionRenameDraft, sessionRenameInputRef, projectsSectionOpen, filteredWorkspaces, projectSessions, expandedProjects, fullyExpandedProjects, workspace, activeSession, renamingProjectPath, projectRenameDraft, projectRenameInputRef, recentSectionOpen, profile,
         setSessionQuery, setSearchOpen, setSidebarOpen, setActiveView, setProjectsSectionOpen, setRecentSectionOpen, setFullyExpandedProjects, setSessionRenameDraft, setProjectRenameDraft, setSettingsOpen, createNewThread, createThreadInProject, openSession, openSessionMenu, openProjectMenu, dragSessionOver, dragProjectOver, finishSidebarDrag, startSessionDrag, startProjectDrag, cancelSidebarDrag, moveSessionByKeyboard, moveProjectByKeyboard, commitSessionRename, cancelSessionRename, commitProjectRename, cancelProjectRename, toggleWorkspace,
       }} />
       <AppMainPane {...{

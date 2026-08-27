@@ -28,6 +28,7 @@ import devinDesktopIcon from "../../assets/devin-desktop-icon.png";
 import { cleanError, crop, imageDataUrl } from "../../lib/app-helpers";
 import type { Attachment, MentionMenuOption, PreviewImage, QueuedPrompt } from "./types";
 import { WeixinBotView } from "../../WeixinBotView";
+import { TelegramBotView } from "../../TelegramBotView";
 import { AttachmentMenu, ModelPicker, PermissionPicker } from "../composer/ComposerControls";
 import { ContextCard } from "../conversation/ContextCard";
 import { AssistantTurn, EmptyState, FollowUpQueue, UserMessage } from "../conversation/ConversationContent";
@@ -36,7 +37,7 @@ import { DesktopInteractionCard, InlineExtensionRequest, SideChatPanel } from ".
 import { EditablePlanCard } from "../plans/PlanCards";
 
 export interface AppMainPaneProps {
-  activeView: "thread" | "weixin";
+  activeView: "thread" | "weixin" | "telegram";
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
@@ -182,6 +183,8 @@ export function AppMainPane(props: AppMainPaneProps) {
       <main className="main-pane">
         {activeView === "weixin" ? (
           <WeixinBotView sidebarOpen={sidebarOpen} onShowSidebar={() => setSidebarOpen(true)} />
+        ) : activeView === "telegram" ? (
+          <TelegramBotView sidebarOpen={sidebarOpen} onShowSidebar={() => setSidebarOpen(true)} />
         ) : (
         <div className="thread-layout" ref={threadLayoutRef}>
           <div className="conversation-column">

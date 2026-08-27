@@ -86,6 +86,7 @@ import {
 } from "./permission-interactions";
 import { beginCommandRevision, completeCommandRevision, rollbackCommandRevision } from "./command-revision-state";
 import { WeixinBotService } from "./weixin/service";
+import { TelegramBotService } from "./telegram/service";
 
 /**
  * The ACP implementation is owned by the runtime layer. The shell only relies
@@ -111,6 +112,7 @@ let agentHost: RuntimeHost | undefined;
 let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
 let weixinBot: WeixinBotService | undefined;
+let telegramBot: TelegramBotService | undefined;
 let tray: Tray | undefined;
 let quitting = false;
 let devinCliUpdatePromise: Promise<DevinCliUpdateStatus> | undefined;
@@ -611,7 +613,9 @@ function createWindow(options: { sessionId?: string; title?: string; background?
   const webContentsId = browserWindow.webContents.id;
   if (options.sessionId) auxiliaryWindowIds.add(webContentsId);
   browserWindow.on("close", (event) => {
-    if (mainWindow !== browserWindow || quitting || !weixinBot?.store.getState().accountId) return;
+    if (mainWindow !== browserWindow || quitting) return;
+    const hasBotBound = Boolean(weixinBot?.store.getState().accountId) || telegramBot?.store.getState().botId != null;
+    if (!hasBotBound) return;
     event.preventDefault();
     browserWindow.hide();
     ensureTray();
@@ -677,27 +681,42 @@ function sendAppCommand(command: string): void {
 function ensureTray(): void {
   if (!tray) {
     tray = new Tray(trayIconPath);
-    tray.setToolTip("Devin Agent · 微信 Bot");
+    tray.setToolTip("Devin Agent");
     tray.on("double-click", showMainWindow);
   }
   void refreshTrayMenu();
 }
 
 async function refreshTrayMenu(): Promise<void> {
-  if (!tray || !weixinBot) return;
-  const bot = weixinBot;
-  const status = await bot.getStatus();
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开 Devin Agent", click: showMainWindow },
-    {
-      label: status.online ? "暂停微信 Bot" : "恢复微信 Bot",
-      click: () => void (status.online ? bot.pause() : bot.start())
-        .then(() => refreshTrayMenu())
-        .catch(() => showMainWindow()),
-    },
-    { type: "separator" },
-    { label: "退出 Devin Agent", click: () => { quitting = true; app.quit(); } },
-  ]));
+  if (!tray) return;
+  const items: Electron.MenuItemConstructorOptions[] = [{ label: "打开 Devin Agent", click: showMainWindow }];
+  if (weixinBot) {
+    const bot = weixinBot;
+    const status = await bot.getStatus().catch(() => undefined);
+    if (status?.boundUserId) {
+      items.push({
+        label: status.online ? "暂停微信 Bot" : "恢复微信 Bot",
+        click: () => void (status.online ? bot.pause() : bot.start())
+          .then(() => refreshTrayMenu())
+          .catch(() => showMainWindow()),
+      });
+    }
+  }
+  if (telegramBot) {
+    const bot = telegramBot;
+    const status = await bot.getStatus().catch(() => undefined);
+    if (status?.boundChatId != null) {
+      items.push({
+        label: status.online ? "暂停 Telegram Bot" : "恢复 Telegram Bot",
+        click: () => void (status.online ? bot.pause() : bot.start())
+          .then(() => refreshTrayMenu())
+          .catch(() => showMainWindow()),
+      });
+    }
+  }
+  items.push({ type: "separator" });
+  items.push({ label: "退出 Devin Agent", click: () => { quitting = true; app.quit(); } });
+  tray.setContextMenu(Menu.buildFromTemplate(items));
 }
 
 function showMainWindow(): void {
@@ -900,19 +919,21 @@ function registerIpc(): void {
 
   ipcMain.handle("sessions:list", async (ipcEvent, cwd: unknown) => {
     const requestedCwd = cwd === undefined ? undefined : expectString(cwd, "cwd", 4_096);
-    const botSessionId = weixinBot?.store.getState().sessionId;
+    const botSessionIds = new Set<string>();
+    if (weixinBot?.store.getState().sessionId) botSessionIds.add(weixinBot.store.getState().sessionId!);
+    if (telegramBot?.store.getState().sessionId) botSessionIds.add(telegramBot.store.getState().sessionId!);
     try {
       const remote = await agentHost?.listSessions?.(requestedCwd);
       if (remote) {
         for (const summary of remote) {
-          if (summary.id !== botSessionId) await upsertSessionSummary(summary);
+          if (!botSessionIds.has(summary.id)) await upsertSessionSummary(summary);
         }
-        return (await listSessions(requestedCwd)).filter((session) => session.id !== botSessionId);
+        return (await listSessions(requestedCwd)).filter((session) => !botSessionIds.has(session.id));
       }
     } catch (error) {
       ipcEvent.sender.send("agent:error", safeError(error));
     }
-    return (await listSessions(requestedCwd)).filter((session) => session.id !== botSessionId);
+    return (await listSessions(requestedCwd)).filter((session) => !botSessionIds.has(session.id));
   });
   ipcMain.handle("sessions:pin", (_event, id: unknown, pinned: unknown) => setSessionPinned(expectMutableSessionId(id), expectBoolean(pinned, "pinned")));
   ipcMain.handle("sessions:reorder", (_event, ids: unknown) => reorderSessions(expectStringList(ids, "session ids", 500, 200)));
@@ -968,6 +989,9 @@ function registerIpc(): void {
     const requestedSessionId = options.sessionId ?? options.sessionPath;
     if (requestedSessionId && requestedSessionId === weixinBot?.store.getState().sessionId) {
       throw new Error("微信 Bot 固定会话只能从微信 Bot 管理界面使用");
+    }
+    if (requestedSessionId && requestedSessionId === telegramBot?.store.getState().sessionId) {
+      throw new Error("Telegram Bot 固定会话只能从 Telegram Bot 管理界面使用");
     }
     if (options.cwd) rendererCwds.set(ipcEvent.sender.id, options.cwd);
     if (options.project && options.cwd) {
@@ -1127,6 +1151,85 @@ function registerIpc(): void {
     app.setLoginItemSettings({ openAtLogin: false, args: [] });
     destroyTray();
   });
+
+  ipcMain.handle("telegram:status", () => requireTelegramBot().getStatus());
+  ipcMain.handle("telegram:choose-workspace", async (ipcEvent) => {
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, {
+      title: "选择 Telegram Bot 工作目录",
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "选择并继续",
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle("telegram:configure-workspace", (_event, value: unknown) => {
+    return requireTelegramBot().configureWorkspace(expectString(value, "Telegram Bot 工作目录", 4_096));
+  });
+  ipcMain.handle("telegram:choose-attachments", async (ipcEvent) => {
+    const state = requireTelegramBot().store.getState();
+    if (!state.workspacePath) throw new Error("请先配置 Telegram Bot 工作目录");
+    const parent = windowForSender(ipcEvent.sender.id) ?? mainWindow;
+    const result = await dialog.showOpenDialog(parent!, {
+      title: "从工作目录发送到 Telegram",
+      defaultPath: state.workspacePath,
+      properties: ["openFile", "multiSelections"],
+      buttonLabel: "添加",
+    });
+    if (result.canceled) return [];
+    const root = await fsp.realpath(state.workspacePath);
+    const files: string[] = [];
+    for (const candidate of result.filePaths.slice(0, 10)) {
+      const real = await fsp.realpath(candidate);
+      if (!isPathInside(root, real)) throw new Error("只能选择 Telegram Bot 工作目录内的文件");
+      const stat = await fsp.stat(real);
+      if (!stat.isFile() || stat.size > 50 * 1024 * 1024) {
+        throw new Error("附件必须是 50 MB 以内的文件");
+      }
+      files.push(real);
+    }
+    return files;
+  });
+  ipcMain.handle("telegram:save-token", (_event, value: unknown) => {
+    return requireTelegramBot().saveToken(expectString(value, "Telegram Bot Token", 200));
+  });
+  ipcMain.handle("telegram:start", async () => {
+    await requireTelegramBot().start();
+    ensureTray();
+  });
+  ipcMain.handle("telegram:pause", async () => {
+    await requireTelegramBot().pause();
+    await refreshTrayMenu();
+  });
+  ipcMain.handle("telegram:disconnect", async () => {
+    await requireTelegramBot().disconnect();
+    await refreshTrayMenu();
+  });
+  ipcMain.handle("telegram:history", (_event, value: unknown) => {
+    const query = value === undefined ? {} : expectRecord(value, "Telegram 消息分页参数");
+    return requireTelegramBot().history({
+      ...(query.before === undefined ? {} : { before: expectPositiveInteger(query.before, "before") }),
+      ...(query.limit === undefined ? {} : { limit: expectPositiveInteger(query.limit, "limit", 200) }),
+    });
+  });
+  ipcMain.handle("telegram:send", (_event, value: unknown) => {
+    const input = expectRecord(value, "Telegram 消息");
+    const text = expectString(input.text, "Telegram 消息文本", 100_000);
+    const attachmentPaths = input.attachmentPaths === undefined
+      ? []
+      : expectStringList(input.attachmentPaths, "Telegram 附件路径", 10, 4_096);
+    return requireTelegramBot().send(text, attachmentPaths);
+  });
+  ipcMain.handle("telegram:abort", () => requireTelegramBot().abortTurn());
+  ipcMain.handle("telegram:set-auto-launch", async (_event, value: unknown) => {
+    const enabled = expectBoolean(value, "Telegram Bot 开机启动");
+    app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? ["--telegram-background"] : [] });
+    await requireTelegramBot().setAutoLaunch(enabled);
+  });
+  ipcMain.handle("telegram:clear", async (_event, value: unknown) => {
+    await requireTelegramBot().clearAllData(expectString(value, "Telegram Bot 清除确认", 100));
+    app.setLoginItemSettings({ openAtLogin: false, args: [] });
+    destroyTray();
+  });
 }
 
 const ALLOWED_AGENT_COMMANDS = new Set(["prompt", "cancel", "abort", "follow_up", "side_chat", "new_session", "get_state", "set_model", "set_mode", "set_config_option", "get_available_models", "get_available_thinking_levels", "compact", "get_session_stats", "get_commands", "handoff", "reconnect"]);
@@ -1148,15 +1251,29 @@ app.whenReady().then(async () => {
       }
     },
   );
+  telegramBot = new TelegramBotService(
+    path.join(app.getPath("userData"), "telegram"),
+    app.getVersion(),
+    appSettings,
+    (event) => {
+      broadcastToRenderers("telegram:event", event);
+      if (event.type === "status") {
+        if (event.status.boundChatId != null) ensureTray();
+        else destroyTray();
+      }
+    },
+  );
   configureSessionIndex(sessionIndexFile);
   agentHost = await createRuntimeHost();
   installFilePreviewProtocol();
   registerIpc();
   installMenu();
   await weixinBot.initialize();
-  const background = process.argv.includes("--weixin-background") && Boolean(weixinBot.store.getState().accountId);
+  await telegramBot.initialize();
+  const background = (process.argv.includes("--weixin-background") && Boolean(weixinBot.store.getState().accountId))
+    || (process.argv.includes("--telegram-background") && Boolean(telegramBot.store.getState().botId));
   createWindow({ background });
-  if (weixinBot.store.getState().accountId) ensureTray();
+  if (weixinBot.store.getState().accountId || telegramBot.store.getState().botId != null) ensureTray();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else showMainWindow();
@@ -1164,13 +1281,14 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin" && !weixinBot?.store.getState().accountId) app.quit();
+  if (process.platform !== "darwin" && !weixinBot?.store.getState().accountId && telegramBot?.store.getState().botId == null) app.quit();
 });
 app.on("before-quit", () => {
   quitting = true;
   interactionBroker.cancelAll();
   void agentHost?.stop?.();
   void weixinBot?.shutdown();
+  void telegramBot?.shutdown();
 });
 
 async function getDevinProviderStatus(): Promise<ProviderStatus> {
@@ -1207,6 +1325,7 @@ async function updateDevinCli(): Promise<DevinCliUpdateStatus> {
 
   await agentHost?.stop?.();
   await weixinBot?.stopAgentRuntime();
+  await telegramBot?.stopAgentRuntime();
   agentHost = undefined;
   try {
     return await installDevinCliUpdate(binary.path, status.latestVersion);
@@ -1341,11 +1460,18 @@ function expectMutableSessionId(value: unknown): string {
   if (sessionId === weixinBot?.store.getState().sessionId) {
     throw new Error("微信 Bot 固定会话只能从微信 Bot 管理界面修改");
   }
+  if (sessionId === telegramBot?.store.getState().sessionId) {
+    throw new Error("Telegram Bot 固定会话只能从 Telegram Bot 管理界面修改");
+  }
   return sessionId;
 }
 function requireWeixinBot(): WeixinBotService {
   if (!weixinBot) throw new Error("微信 Bot 服务尚未初始化");
   return weixinBot;
+}
+function requireTelegramBot(): TelegramBotService {
+  if (!telegramBot) throw new Error("Telegram Bot 服务尚未初始化");
+  return telegramBot;
 }
 function expectAgentStartOptions(value: unknown): AgentStartOptions {
   const data = expectRecord(value, "agent options");

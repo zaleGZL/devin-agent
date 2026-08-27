@@ -4,9 +4,9 @@ import type {
 } from "react";
 import {
   Bot, ChevronRight, Ellipsis, Folder, FolderOpen, LoaderCircle,
-  PanelLeft, Plus, Search, SquarePen,
+  PanelLeft, Plus, Search, Send, SquarePen,
 } from "lucide-react";
-import type { SessionSummary, UserProfile, WeixinBotStatus, WorkspaceItem } from "../../../shared/types";
+import type { SessionSummary, TelegramBotStatus, UserProfile, WeixinBotStatus, WorkspaceItem } from "../../../shared/types";
 import type { SidebarSessionGroupKey } from "../../lib/sidebar-order";
 import { useI18n } from "../../lib/i18n";
 import { ProfileAvatar } from "../settings/SettingsDialog";
@@ -17,8 +17,9 @@ const PROJECT_TASK_PREVIEW_COUNT = 4;
 export interface AppSidebarProps {
   sidebarOpen: boolean;
   sessionQuery: string;
-  activeView: "thread" | "weixin";
+  activeView: "thread" | "weixin" | "telegram";
   weixinStatus?: WeixinBotStatus;
+  telegramStatus?: TelegramBotStatus;
   pinnedSessions: SessionSummary[];
   recentTasks: SessionSummary[];
   selectedThreadPath?: string;
@@ -43,7 +44,7 @@ export interface AppSidebarProps {
   setSessionQuery: Dispatch<SetStateAction<string>>;
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
-  setActiveView: Dispatch<SetStateAction<"thread" | "weixin">>;
+  setActiveView: Dispatch<SetStateAction<"thread" | "weixin" | "telegram">>;
   setProjectsSectionOpen: Dispatch<SetStateAction<boolean>>;
   setRecentSectionOpen: Dispatch<SetStateAction<boolean>>;
   setFullyExpandedProjects: Dispatch<SetStateAction<Set<string>>>;
@@ -73,7 +74,7 @@ export interface AppSidebarProps {
 export function AppSidebar(props: AppSidebarProps) {
   const { t } = useI18n();
   const {
-    sidebarOpen, sessionQuery, activeView, weixinStatus, pinnedSessions, recentTasks,
+    sidebarOpen, sessionQuery, activeView, weixinStatus, telegramStatus, pinnedSessions, recentTasks,
     selectedThreadPath, runningSessionIds, unreadSessionIds, sidebarDrag, renamingSessionId,
     sessionRenameDraft, sessionRenameInputRef, projectsSectionOpen, filteredWorkspaces,
     projectSessions, expandedProjects, fullyExpandedProjects, workspace, activeSession,
@@ -112,6 +113,10 @@ export function AppSidebar(props: AppSidebarProps) {
           <button className={`new-thread-button weixin-sidebar-button${activeView === "weixin" ? " active" : ""}`} onClick={() => setActiveView("weixin")}>
             <Bot size={16} /> 微信 Bot
             <span className={`weixin-sidebar-dot${weixinStatus?.online ? " online" : weixinStatus?.lastError ? " error" : ""}`} />
+          </button>
+          <button className={`new-thread-button weixin-sidebar-button${activeView === "telegram" ? " active" : ""}`} onClick={() => setActiveView("telegram")}>
+            <Send size={16} /> Telegram Bot
+            <span className={`weixin-sidebar-dot${telegramStatus?.online ? " online" : telegramStatus?.lastError ? " error" : ""}`} />
           </button>
         </div>
 
